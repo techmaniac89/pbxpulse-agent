@@ -1,0 +1,1329 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from pbxpulse_agent.ami import (
+    AmiEvent,
+    _endpoint_role,
+    _endpoints_from_events,
+    _number_from_pjsip_value,
+)
+from pbxpulse_agent.connectors import connector_for_settings
+from pbxpulse_agent.freeswitch import FreeSwitchClient, _channel_from_row
+from pbxpulse_agent.history import (
+    CdrCall,
+    history_diagnostics,
+    read_recent_cdr_calls,
+    read_recent_voicemails,
+)
+from pbxpulse_agent.live import home_live_events
+from pbxpulse_agent.pulse import AmiChannel, AmiEndpoint, AmiSnapshot, build_home_payload
+from pbxpulse_agent.settings import AgentSettings
+
+
+class PulseMappingTest(unittest.TestCase):
+    def test_connector_factory_can_select_freeswitch(self) -> None:
+        settings = AgentSettings(
+            mode="freeswitch",
+            pbx_type="freeswitch",
+            host="127.0.0.1",
+            port=5038,
+            username="",
+            password="",
+            freeswitch_host="127.0.0.1",
+            freeswitch_port=8021,
+            freeswitch_password="secret",
+            display_name="FreeSWITCH",
+            timeout_seconds=3,
+            extension_names={},
+            cdr_csv_path="/tmp/Master.csv",
+            voicemail_path="/tmp/voicemail",
+            timezone="UTC",
+            token="",
+            live_interval_seconds=2,
+        )
+
+        connector = connector_for_settings(settings)
+
+        self.assertIsInstance(connector, FreeSwitchClient)
+
+    def test_freeswitch_channel_row_maps_to_pbxpulse_snapshot_channel(self) -> None:
+        channel = _channel_from_row(
+            {
+                "uuid": "call-1",
+                "name": "sofia/internal/101@pbx.local",
+                "cid_name": "Reception",
+                "cid_num": "101",
+                "dest": "102",
+                "state": "CS_EXECUTE",
+                "call_uuid": "bridge-1",
+            }
+        )
+
+        self.assertEqual(channel.endpoint, "101")
+        self.assertEqual(channel.extension, "102")
+        self.assertEqual(channel.caller, "Reception")
+        self.assertEqual(channel.caller_number, "101")
+        self.assertEqual(channel.linked_id, "bridge-1")
+
+    def test_ami_contact_status_refreshes_endpoint_reachability(self) -> None:
+        endpoints = _endpoints_from_events(
+            [
+                AmiEvent(
+                    name="EndpointList",
+                    fields={
+                        "ObjectName": "102",
+                        "DeviceState": "Unavailable",
+                        "ActiveChannels": "0",
+                    },
+                ),
+                AmiEvent(
+                    name="ContactList",
+                    fields={
+                        "EndpointName": "102",
+                        "Status": "Reachable",
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(endpoints[0].device_state, "Reachable")
+
+    def test_ami_unreachable_contact_stays_unreachable(self) -> None:
+        endpoints = _endpoints_from_events(
+            [
+                AmiEvent(
+                    name="EndpointList",
+                    fields={
+                        "ObjectName": "103",
+                        "DeviceState": "Reachable",
+                        "ActiveChannels": "0",
+                    },
+                ),
+                AmiEvent(
+                    name="ContactList",
+                    fields={
+                        "EndpointName": "103",
+                        "Status": "Unreachable",
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(endpoints[0].device_state, "Unreachable")
+
+    def test_pjsip_uri_can_provide_trunk_number(self) -> None:
+        self.assertEqual(
+            _number_from_pjsip_value("sip:2105550000@sip.provider.example"),
+            "2105550000",
+        )
+        self.assertEqual(
+            _number_from_pjsip_value('"Office" <sip:+302105550000@pbx.example>'),
+            "+302105550000",
+        )
+
+    def test_live_events_describe_changed_home_snapshot_parts(self) -> None:
+        previous = {
+            "connection": {"kind": "local", "label": "Connected"},
+            "now": {"title": "The office is quiet.", "isActive": False},
+            "signals": [
+                {
+                    "id": "sig_old",
+                    "title": "Old Signal",
+                    "state": "active",
+                }
+            ],
+            "calls": [],
+            "people": [
+                {
+                    "extension": "101",
+                    "name": "Reception",
+                    "status": "online",
+                }
+            ],
+            "trunks": [
+                {
+                    "endpoint": "cosmote",
+                    "name": "Cosmote",
+                    "statusText": "Available",
+                }
+            ],
+        }
+        current = {
+            "connection": {"kind": "reconnecting", "label": "Reconnecting"},
+            "now": {"title": "Reception is talking.", "isActive": True},
+            "signals": [
+                {
+                    "id": "sig_old",
+                    "title": "Old Signal resolved",
+                    "state": "resolved",
+                },
+                {
+                    "id": "sig_new",
+                    "title": "New Signal",
+                    "state": "active",
+                },
+            ],
+            "calls": [{"title": "Reception is talking.", "isActive": True}],
+            "people": [
+                {
+                    "extension": "101",
+                    "name": "Reception",
+                    "status": "talking",
+                }
+            ],
+            "trunks": [
+                {
+                    "endpoint": "cosmote",
+                    "name": "Cosmote",
+                    "statusText": "Carrying a call",
+                }
+            ],
+        }
+
+        events = home_live_events(previous, current)
+
+        self.assertEqual(
+            [event["type"] for event in events],
+            [
+                "connection_updated",
+                "call_updated",
+                "signal_updated",
+                "signal_created",
+                "calls_updated",
+                "person_updated",
+                "trunk_updated",
+            ],
+        )
+
+    def test_home_payload_maps_active_call_to_signal(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/101-00000042",
+                        extension="101",
+                        caller="Maria",
+                        connected="Reception",
+                        state="Up",
+                    )
+                ],
+                endpoints=[AmiEndpoint(extension="101", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"101": "Reception"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["greeting"], "Good evening")
+        self.assertEqual(payload["connection"]["kind"], "local")
+        self.assertIs(payload["now"]["isActive"], True)
+        self.assertEqual(payload["signals"][0]["title"], "Reception is talking to Maria.")
+        self.assertEqual(payload["people"][0]["status"], "talking")
+
+    def test_unreachable_ami_becomes_health_signal(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=False,
+                agent_version="test",
+                error="connection refused",
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 9, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["greeting"], "Good morning")
+        self.assertEqual(payload["connection"]["kind"], "reconnecting")
+        self.assertEqual(payload["signals"][0]["category"], "health")
+        self.assertEqual(payload["signals"][0]["importance"], "important")
+        self.assertEqual(payload["signals"][0]["technical"]["error"], "connection refused")
+
+    def test_unavailable_endpoint_becomes_attention_signal(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(extension="200", device_state="Unavailable"),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={"200": "Warehouse"},
+            now=datetime(2026, 6, 26, 13, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["greeting"], "Good afternoon")
+        self.assertEqual(payload["people"][0]["status"], "unavailable")
+        self.assertEqual(payload["signals"][0]["title"], "Warehouse looks unavailable.")
+        self.assertEqual(payload["signals"][0]["importance"], "attention")
+
+    def test_endpoint_label_is_used_before_manual_extension_name(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/101-00000042",
+                        extension="101",
+                        caller="Maria",
+                        connected="",
+                        state="Up",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="101",
+                        device_state="Reachable",
+                        label="Front Desk",
+                    )
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={"101": "Reception"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["people"][0]["name"], "Front Desk")
+        self.assertEqual(payload["signals"][0]["title"], "Front Desk is talking to Maria.")
+
+    def test_trunk_is_not_shown_as_person(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(
+                        extension="sip-provider",
+                        device_state="Reachable",
+                        label="Main SIP trunk",
+                        role="trunk",
+                    ),
+                    AmiEndpoint(extension="101", device_state="Reachable"),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={"101": "Reception"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(len(payload["people"]), 1)
+        self.assertEqual(payload["people"][0]["name"], "Reception")
+        self.assertEqual(len(payload["trunks"]), 1)
+        self.assertEqual(payload["trunks"][0]["name"], "Main SIP trunk")
+
+    def test_unavailable_trunk_becomes_trunk_health_signal(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(
+                        extension="sip-provider",
+                        device_state="Unavailable",
+                        label="Main SIP trunk",
+                        role="trunk",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["people"], [])
+        self.assertEqual(payload["trunks"][0]["available"], False)
+        self.assertEqual(payload["signals"][0]["kind"], "trunk_unavailable")
+        self.assertEqual(
+            payload["signals"][0]["title"],
+            "Main SIP trunk looks unavailable.",
+        )
+        self.assertEqual(payload["signals"][0]["technical"]["role"], "trunk")
+
+    def test_registered_trunk_is_shown_as_working(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(
+                        extension="cosmote",
+                        device_state="Registered",
+                        label="Cosmote",
+                        role="trunk",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["people"], [])
+        self.assertEqual(payload["trunks"][0]["statusText"], "Working")
+        self.assertEqual(payload["trunks"][0]["detail"], "Registered and ready")
+        self.assertEqual(payload["trunks"][0]["available"], True)
+
+    def test_active_trunk_channel_does_not_create_duplicate_trunk_signal(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/cosmote-00000044",
+                        extension="2105550000",
+                        caller="2101234567",
+                        connected="",
+                        state="Up",
+                        endpoint="cosmote",
+                        caller_number="102",
+                        connected_number="2105550000",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="cosmote",
+                        device_state="Registered",
+                        active_channels=1,
+                        label="Cosmote",
+                        role="trunk",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        trunk_signals = [
+            signal for signal in payload["signals"] if signal["technical"].get("role") == "trunk"
+        ]
+        self.assertEqual(len(trunk_signals), 1)
+        self.assertEqual(payload["now"]["title"], "102 is calling 2105550000.")
+        self.assertEqual(trunk_signals[0]["title"], "102 is calling 2105550000.")
+        self.assertEqual(trunk_signals[0]["technical"]["destination"], "2105550000")
+
+    def test_trunk_call_replaces_dialplan_placeholder_with_trunk_number(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/cosmote-00000045",
+                        extension="s",
+                        caller="2101234567",
+                        connected="",
+                        state="Up",
+                        endpoint="cosmote",
+                        caller_number="2101234567",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="cosmote",
+                        device_state="Registered",
+                        active_channels=1,
+                        label="Cosmote",
+                        role="trunk",
+                        number="2105550000",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        trunk_signals = [
+            signal for signal in payload["signals"] if signal["technical"].get("role") == "trunk"
+        ]
+        self.assertEqual(payload["now"]["title"], "2101234567 is calling 2105550000.")
+        self.assertEqual(
+            trunk_signals[0]["title"],
+            "2101234567 is calling 2105550000.",
+        )
+        self.assertEqual(trunk_signals[0]["technical"]["destination"], "2105550000")
+
+    def test_unknown_endpoint_name_falls_back_to_number_only(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[AmiEndpoint(extension="205", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["people"][0]["name"], "205")
+
+    def test_linphone_named_endpoint_is_still_a_person(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(
+                        extension="linphone",
+                        device_state="Reachable",
+                        label="Linphone",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(len(payload["people"]), 1)
+        self.assertEqual(payload["people"][0]["name"], "Linphone")
+
+    def test_cosmote_endpoint_is_classified_as_trunk(self) -> None:
+        self.assertEqual(_endpoint_role("cosmote", {}), "trunk")
+        self.assertEqual(
+            _endpoint_role("main-line", {"Description": "Cosmote SIP line"}),
+            "trunk",
+        )
+
+    def test_internal_call_uses_channel_endpoint_and_display_names(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/102-00000042",
+                        extension="103",
+                        caller="TechManiac",
+                        connected="<unknown>",
+                        state="Up",
+                        endpoint="102",
+                        caller_number="102",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="102",
+                        device_state="Reachable",
+                        label="TechManiac",
+                    ),
+                    AmiEndpoint(
+                        extension="103",
+                        device_state="Reachable",
+                        label="Support Desk",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["now"]["title"], "TechManiac is talking to Support Desk.")
+        self.assertEqual(payload["people"][0]["status"], "talking")
+
+    def test_reverse_internal_call_uses_display_name_instead_of_unknown(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/103-00000043",
+                        extension="102",
+                        caller="<unknown>",
+                        connected="<unknown>",
+                        state="Up",
+                        endpoint="103",
+                        caller_number="103",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="102",
+                        device_state="Reachable",
+                        label="TechManiac",
+                    ),
+                    AmiEndpoint(
+                        extension="103",
+                        device_state="Reachable",
+                        label="Support Desk",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["now"]["title"], "Support Desk is talking to TechManiac.")
+        self.assertEqual(payload["people"][1]["status"], "talking")
+
+    def test_mirrored_internal_call_legs_become_one_active_call(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/102-00000050",
+                        extension="linphone",
+                        caller="MicroSIP",
+                        connected="Linphone",
+                        state="Up",
+                        endpoint="102",
+                        caller_number="102",
+                    ),
+                    AmiChannel(
+                        channel="PJSIP/linphone-00000051",
+                        extension="102",
+                        caller="Linphone",
+                        connected="MicroSIP",
+                        state="Up",
+                        endpoint="linphone",
+                        caller_number="linphone",
+                    ),
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="102",
+                        device_state="Reachable",
+                        label="MicroSIP",
+                    ),
+                    AmiEndpoint(
+                        extension="linphone",
+                        device_state="Reachable",
+                        label="Linphone",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(len(payload["calls"]), 1)
+        self.assertEqual(payload["now"]["title"], "MicroSIP is talking to Linphone.")
+
+    def test_mirrored_internal_call_prefers_original_caller_leg(self) -> None:
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/103-00000051",
+                        extension="102",
+                        caller="MicroSIP",
+                        connected="Linphone",
+                        state="Up",
+                        endpoint="103",
+                        caller_number="102",
+                        linked_id="bridge-1",
+                    ),
+                    AmiChannel(
+                        channel="PJSIP/102-00000050",
+                        extension="103",
+                        caller="MicroSIP",
+                        connected="Linphone",
+                        state="Up",
+                        endpoint="102",
+                        caller_number="102",
+                        linked_id="bridge-1",
+                    ),
+                ],
+                endpoints=[
+                    AmiEndpoint(
+                        extension="102",
+                        device_state="Reachable",
+                        label="MicroSIP",
+                    ),
+                    AmiEndpoint(
+                        extension="103",
+                        device_state="Reachable",
+                        label="Linphone",
+                    ),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(len(payload["calls"]), 1)
+        self.assertEqual(payload["now"]["title"], "MicroSIP is talking to Linphone.")
+
+    def test_cdr_history_adds_answered_and_missed_calls(self) -> None:
+        with TemporaryDirectory() as directory:
+            cdr_path = Path(directory) / "Master.csv"
+            cdr_path.write_text(
+                '"","101","102","from-internal","101","PJSIP/101","PJSIP/102","Dial","","2026-06-26 20:00:00","2026-06-26 20:00:02","2026-06-26 20:01:02","62","60","ANSWERED","","1"\n'
+                '"","103","104","from-internal","103","PJSIP/103","","Dial","","2026-06-26 20:05:00","","2026-06-26 20:05:30","30","0","NO ANSWER","","2"\n',
+                encoding="utf-8",
+            )
+            records = read_recent_cdr_calls(str(cdr_path))
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=records,
+            ),
+            display_name="Office PBX",
+            extension_names={"101": "Reception", "102": "Support", "103": "Sales"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        titles = [call["title"] for call in payload["calls"]]
+        self.assertIn("Reception called Support.", titles)
+        self.assertIn("Sales missed 104.", titles)
+        self.assertIn("missed", {call["kind"] for call in payload["calls"]})
+
+    def test_cdr_history_does_not_replace_current_moment(self) -> None:
+        record = CdrCall(
+            source="linphone",
+            destination="102",
+            disposition="NO ANSWER",
+            started_at=datetime(2026, 6, 26, 19, 55),
+            duration_seconds=12,
+        )
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=[record],
+            ),
+            display_name="Office PBX",
+            extension_names={"linphone": "Linphone", "102": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["now"]["title"], "The office is quiet.")
+        self.assertIn("Linphone missed Support.", [call["title"] for call in payload["calls"]])
+
+    def test_reachable_payload_always_includes_a_24_hour_moment_signal(self) -> None:
+        now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
+        recent_record = CdrCall(
+            source="101",
+            destination="102",
+            disposition="ANSWERED",
+            started_at=now.replace(tzinfo=None) - timedelta(hours=2),
+            duration_seconds=60,
+        )
+        old_record = CdrCall(
+            source="103",
+            destination="104",
+            disposition="ANSWERED",
+            started_at=now.replace(tzinfo=None) - timedelta(days=2),
+            duration_seconds=60,
+        )
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=[recent_record, old_record],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=now,
+        )
+
+        moments = [
+            signal for signal in payload["signals"] if signal["category"] == "moment"
+        ]
+        self.assertEqual(len(moments), 1)
+        self.assertIn(
+            moments[0]["kind"],
+            {
+                "pbx_daily_flow_moment",
+                "pbx_answered_cleanly_moment",
+                "pbx_quieter_than_yesterday_moment",
+            },
+        )
+        self.assertEqual(moments[0]["timeLabel"], "Last 24 hours")
+        self.assertEqual(moments[0]["technical"]["recent_calls"], "1")
+        self.assertEqual(moments[0]["technical"]["answered_calls"], "1")
+        self.assertIn("moment_pool", moments[0]["technical"])
+
+    def test_daily_moment_rotates_calm_wording_by_day(self) -> None:
+        payload_one = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test"),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+        payload_two = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test"),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 27, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        moment_one = next(
+            signal for signal in payload_one["signals"] if signal["category"] == "moment"
+        )
+        moment_two = next(
+            signal for signal in payload_two["signals"] if signal["category"] == "moment"
+        )
+
+        self.assertNotEqual(moment_one["id"], moment_two["id"])
+        self.assertNotEqual(moment_one["title"], moment_two["title"])
+        self.assertIn("pbx_calm_day_moment", moment_one["technical"]["moment_pool"])
+
+    def test_cdr_history_replaces_placeholder_destination_with_trunk_number(self) -> None:
+        record = CdrCall(
+            source="2101234567",
+            destination="s",
+            disposition="ANSWERED",
+            started_at=datetime(2026, 6, 26, 19, 55),
+            duration_seconds=20,
+            channel="PJSIP/cosmote-00000001",
+        )
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                endpoints=[
+                    AmiEndpoint(
+                        extension="cosmote",
+                        device_state="Registered",
+                        label="Cosmote",
+                        role="trunk",
+                        number="2105550000",
+                    )
+                ],
+                recent_calls=[record],
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertIn(
+            "2101234567 called 2105550000.",
+            [call["title"] for call in payload["calls"]],
+        )
+
+    def test_voicemail_spool_adds_voicemail_calls(self) -> None:
+        with TemporaryDirectory() as directory:
+            message_path = Path(directory) / "default" / "120" / "INBOX"
+            message_path.mkdir(parents=True)
+            (message_path / "msg0000.txt").write_text(
+                'callerid="Maria"\norigtime=1782493200\n',
+                encoding="utf-8",
+            )
+            messages = read_recent_voicemails(directory)
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                voicemails=messages,
+            ),
+            display_name="Office PBX",
+            extension_names={"120": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["calls"][0]["kind"], "voicemail")
+        self.assertEqual(payload["calls"][0]["title"], "Maria left Support a voicemail.")
+
+    def test_history_diagnostics_reports_cdr_and_voicemail_visibility(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cdr_path = root / "Master.csv"
+            cdr_path.write_text(
+                '"","101","102","from-internal","101","PJSIP/101","PJSIP/102","Dial","","2026-06-26 20:00:00","2026-06-26 20:00:02","2026-06-26 20:01:02","62","60","ANSWERED","","1"\n',
+                encoding="utf-8",
+            )
+            voicemail_path = root / "voicemail" / "default" / "120" / "INBOX"
+            voicemail_path.mkdir(parents=True)
+            (voicemail_path / "msg0000.txt").write_text(
+                'callerid="Maria"\norigtime=1782493200\n',
+                encoding="utf-8",
+            )
+
+            diagnostics = history_diagnostics(
+                str(cdr_path),
+                str(root / "voicemail"),
+            )
+
+        self.assertTrue(diagnostics["cdrCsvExists"])
+        self.assertTrue(diagnostics["cdrCsvReadable"])
+        self.assertEqual(diagnostics["cdrRecentRowsReadable"], 1)
+        self.assertTrue(diagnostics["voicemailPathExists"])
+        self.assertEqual(diagnostics["voicemailMessagesReadable"], 1)
+
+    def test_pulse_engine_adds_tip_for_repeated_missed_calls(self) -> None:
+        calls = [
+            CdrCall(
+                source="101",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="102",
+                destination="120",
+                disposition="BUSY",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="120", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"120": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        tips = [signal for signal in payload["signals"] if signal["category"] == "recommendation"]
+        self.assertEqual(tips[0]["kind"], "missed_call_pattern")
+        self.assertEqual(tips[0]["title"], "Support missed 2 recent calls.")
+
+    def test_pulse_engine_deduplicates_cdr_legs_for_one_missed_call(self) -> None:
+        calls = [
+            CdrCall(
+                source="2100000000",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30, 1),
+                duration_seconds=0,
+                channel="PJSIP/trunk-00000001",
+                destination_channel="PJSIP/120-00000002",
+                last_app="Dial",
+                last_data="PJSIP/120,30",
+            ),
+            CdrCall(
+                source="2100000000",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30, 2),
+                duration_seconds=0,
+                channel="PJSIP/trunk-00000001",
+                destination_channel="PJSIP/120-00000003",
+                last_app="Dial",
+                last_data="PJSIP/120,30",
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="120", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"120": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        tips = [
+            signal
+            for signal in payload["signals"]
+            if signal["kind"] == "missed_call_pattern"
+        ]
+        insights = [
+            signal
+            for signal in payload["signals"]
+            if signal["kind"] == "call_mix_insight"
+        ]
+
+        self.assertEqual(tips, [])
+        self.assertEqual(insights[0]["technical"]["missed_calls"], "1")
+
+    def test_pulse_engine_ignores_non_endpoint_missed_call_destinations(self) -> None:
+        calls = [
+            CdrCall(
+                source="101",
+                destination="1",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="102",
+                destination="1",
+                disposition="BUSY",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="103",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 50),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="104",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 55),
+                duration_seconds=0,
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="120", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"120": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        tips = [signal for signal in payload["signals"] if signal["category"] == "recommendation"]
+        self.assertEqual(len(tips), 1)
+        self.assertEqual(tips[0]["technical"]["extension"], "120")
+
+    def test_pulse_engine_resolves_ivr_option_to_dialed_phones(self) -> None:
+        calls = [
+            CdrCall(
+                source="2100000000",
+                destination="1",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=0,
+                last_app="Dial",
+                last_data="PJSIP/102&PJSIP/103,30",
+            ),
+            CdrCall(
+                source="2100000001",
+                destination="1",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+                last_app="Dial",
+                last_data="PJSIP/102&PJSIP/103,30",
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[
+                    AmiEndpoint(extension="102", device_state="Reachable"),
+                    AmiEndpoint(extension="103", device_state="Reachable"),
+                ],
+            ),
+            display_name="Office PBX",
+            extension_names={"102": "MicroSIP", "103": "Linphone"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        titles = [
+            signal["title"]
+            for signal in payload["signals"]
+            if signal["category"] == "recommendation"
+        ]
+        self.assertIn("MicroSIP missed 2 recent calls.", titles)
+        self.assertIn("Linphone missed 2 recent calls.", titles)
+
+    def test_pulse_engine_resolves_s_extension_to_dialed_phone(self) -> None:
+        calls = [
+            CdrCall(
+                source="2100000000",
+                destination="s",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=0,
+                last_app="Dial",
+                last_data="SIP/102,25",
+            ),
+            CdrCall(
+                source="2100000001",
+                destination="s",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+                last_app="Dial",
+                last_data="SIP/102,25",
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="102", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"102": "MicroSIP"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        tips = [signal for signal in payload["signals"] if signal["category"] == "recommendation"]
+        self.assertEqual(len(tips), 1)
+        self.assertEqual(tips[0]["title"], "MicroSIP missed 2 recent calls.")
+
+    def test_pulse_engine_adds_call_mix_insight(self) -> None:
+        calls = [
+            CdrCall(
+                source="101",
+                destination="102",
+                disposition="ANSWERED",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=60,
+            ),
+            CdrCall(
+                source="103",
+                destination="104",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        insights = [signal for signal in payload["signals"] if signal["category"] == "insight"]
+        self.assertEqual(insights[0]["kind"], "call_mix_insight")
+        self.assertEqual(insights[0]["technical"]["answered_calls"], "1")
+        self.assertEqual(insights[0]["technical"]["missed_calls"], "1")
+
+    def test_pulse_engine_adds_security_signal_for_failed_call_cluster(self) -> None:
+        calls = [
+            CdrCall(
+                source=str(index),
+                destination="900",
+                disposition="FAILED",
+                started_at=datetime(2026, 6, 26, 19, 30 + index),
+                duration_seconds=0,
+            )
+            for index in range(3)
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        security = [signal for signal in payload["signals"] if signal["category"] == "security"]
+        self.assertEqual(security[0]["kind"], "failed_call_cluster")
+        self.assertEqual(security[0]["technical"]["attempts"], "3")
+
+    def test_home_payload_can_carry_every_signal_category(self) -> None:
+        calls = [
+            CdrCall(
+                source="101",
+                destination="120",
+                disposition="NO ANSWER",
+                started_at=datetime(2026, 6, 26, 19, 30),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="102",
+                destination="120",
+                disposition="BUSY",
+                started_at=datetime(2026, 6, 26, 19, 40),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="901",
+                destination="900",
+                disposition="FAILED",
+                started_at=datetime(2026, 6, 26, 19, 45),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="902",
+                destination="900",
+                disposition="FAILED",
+                started_at=datetime(2026, 6, 26, 19, 46),
+                duration_seconds=0,
+            ),
+            CdrCall(
+                source="903",
+                destination="900",
+                disposition="FAILED",
+                started_at=datetime(2026, 6, 26, 19, 47),
+                duration_seconds=0,
+            ),
+        ]
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                channels=[
+                    AmiChannel(
+                        channel="PJSIP/101-00000042",
+                        extension="120",
+                        caller="Reception",
+                        connected="Support",
+                        state="Up",
+                        endpoint="101",
+                        caller_number="101",
+                    )
+                ],
+                endpoints=[
+                    AmiEndpoint(extension="101", device_state="Reachable"),
+                    AmiEndpoint(extension="120", device_state="Reachable"),
+                    AmiEndpoint(extension="200", device_state="Unavailable"),
+                ],
+                recent_calls=calls,
+            ),
+            display_name="Office PBX",
+            extension_names={
+                "101": "Reception",
+                "120": "Support",
+                "200": "Warehouse",
+            },
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        categories = {signal["category"] for signal in payload["signals"]}
+        self.assertEqual(
+            categories,
+            {
+                "activity",
+                "health",
+                "security",
+                "insight",
+                "recommendation",
+                "moment",
+            },
+        )
+
+    def test_pulse_engine_learns_weekday_volume_pattern(self) -> None:
+        calls: list[CdrCall] = []
+        for day in (1, 2, 3, 4):
+            calls.append(
+                CdrCall(
+                    source=str(day),
+                    destination="120",
+                    disposition="ANSWERED",
+                    started_at=datetime(2026, 6, day, 9),
+                    duration_seconds=30,
+                )
+            )
+        for day in (5, 12, 19):
+            for index in range(4):
+                calls.append(
+                    CdrCall(
+                        source=str(100 + index),
+                        destination="120",
+                        disposition="ANSWERED",
+                        started_at=datetime(2026, 6, day, 10, index),
+                        duration_seconds=30,
+                    )
+                )
+        for index in range(9):
+            calls.append(
+                CdrCall(
+                    source=str(200 + index),
+                    destination="120",
+                    disposition="ANSWERED",
+                    started_at=datetime(2026, 6, 26, 10, index),
+                    duration_seconds=30,
+                )
+            )
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+            ),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        titles = [
+            signal["title"]
+            for signal in payload["signals"]
+            if signal["kind"] == "weekday_volume_pattern"
+        ]
+        self.assertIn("Today is busier than this weekday usually is.", titles)
+
+    def test_pulse_engine_recommends_when_missed_rate_is_higher_than_usual(self) -> None:
+        calls: list[CdrCall] = []
+        for day in range(10, 20):
+            for index in range(2):
+                calls.append(
+                    CdrCall(
+                        source=f"{day}{index}",
+                        destination="120",
+                        disposition="ANSWERED",
+                        started_at=datetime(2026, 6, day, 10, index),
+                        duration_seconds=30,
+                    )
+                )
+        for index in range(6):
+            calls.append(
+                CdrCall(
+                    source=str(200 + index),
+                    destination="120",
+                    disposition="NO ANSWER" if index < 4 else "ANSWERED",
+                    started_at=datetime(2026, 6, 26, 11, index),
+                    duration_seconds=0,
+                )
+            )
+
+        payload = build_home_payload(
+            AmiSnapshot(
+                reachable=True,
+                agent_version="test",
+                recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="120", device_state="Reachable")],
+            ),
+            display_name="Office PBX",
+            extension_names={"120": "Support"},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        tips = [
+            signal
+            for signal in payload["signals"]
+            if signal["kind"] == "missed_rate_pattern"
+        ]
+        self.assertEqual(tips[0]["title"], "Missed calls are higher than usual today.")
+        self.assertEqual(tips[0]["technical"]["today_missed_calls"], "4")
+
+
+if __name__ == "__main__":
+    unittest.main()

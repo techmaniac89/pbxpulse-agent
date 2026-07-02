@@ -1,0 +1,36 @@
+services:
+  pbxpulse-agent:
+    build:
+      context: .
+    container_name: pbxpulse-agent
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      PBXPULSE_PBX_TYPE: ${PBXPULSE_PBX_TYPE}
+      PBXPULSE_AGENT_MODE: ${PBXPULSE_AGENT_MODE}
+      PBXPULSE_DISPLAY_NAME: ${PBXPULSE_DISPLAY_NAME}
+      PBXPULSE_AGENT_TOKEN: ${PBXPULSE_AGENT_TOKEN}
+      PBXPULSE_CONNECT_TIMEOUT: ${PBXPULSE_CONNECT_TIMEOUT}
+      ASTERISK_AMI_HOST: ${ASTERISK_AMI_HOST}
+      ASTERISK_AMI_PORT: ${ASTERISK_AMI_PORT}
+      ASTERISK_AMI_USERNAME: ${ASTERISK_AMI_USERNAME}
+      ASTERISK_AMI_PASSWORD: ${ASTERISK_AMI_PASSWORD}
+      ASTERISK_AMI_TIMEOUT: ${ASTERISK_AMI_TIMEOUT}
+      ASTERISK_CDR_CSV_PATH: ${ASTERISK_CDR_CSV_PATH}
+      ASTERISK_VOICEMAIL_PATH: ${ASTERISK_VOICEMAIL_PATH}
+      FREESWITCH_ESL_HOST: ${FREESWITCH_ESL_HOST}
+      FREESWITCH_ESL_PORT: ${FREESWITCH_ESL_PORT}
+      FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
+      #PBXPULSE_EXTENSION_NAMES: ${PBXPULSE_EXTENSION_NAMES}
+    volumes:
+      - pbxpulse-agent-data:/var/lib/pbxpulse-agent
+      - pbxpulse-agent-logs:/var/log/pbxpulse-agent
+      - ${ASTERISK_LOGS_HOST_PATH:-../asterisk/logs}:/var/log/asterisk:ro
+      - ${ASTERISK_SPOOL_HOST_PATH:-../asterisk/spool}:/var/spool/asterisk:ro
+      - /etc/localtime:/etc/localtime:ro
+
+volumes:
+  pbxpulse-agent-data:
+  pbxpulse-agent-logs:

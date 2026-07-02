@@ -1,0 +1,7 @@
+services:
+  pbxpulse-agent:
+    network_mode: bridge
+    ports:
+      - "8765:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
