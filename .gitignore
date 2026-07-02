@@ -1,0 +1,21 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+packaging/build/
+
+# Local leftovers from the old app workspace layout.
+/agent/
+/android/
+/build/
+/landing/
+/lib/
+/.dart_tool/
+/.flutter-plugins-dependencies
+/.idea/
+/devtools_options.yaml
+/*.iml
