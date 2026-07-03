@@ -291,7 +291,7 @@ def home(request: Request):
     if redirect := _localhost_cookie_redirect(request):
         return redirect
     _require_token(request)
-    payload = _home_payload()
+    payload = _home_payload(moment_hours=_moment_hours(request))
     if _wants_html(request):
         return HTMLResponse(_json_page(request, "PBXPulse home snapshot", payload))
     return JSONResponse(payload)
@@ -355,11 +355,18 @@ async def live(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
-    previous_payload = await asyncio.to_thread(_home_payload)
+    moment_hours = _websocket_moment_hours(websocket)
+    previous_payload = await asyncio.to_thread(
+        _home_payload,
+        moment_hours=moment_hours,
+    )
     await websocket.send_json({"type": "home_snapshot", "data": previous_payload})
     while True:
         await asyncio.sleep(settings.live_interval_seconds)
-        current_payload = await asyncio.to_thread(_home_payload)
+        current_payload = await asyncio.to_thread(
+            _home_payload,
+            moment_hours=moment_hours,
+        )
         if current_payload != previous_payload:
             await websocket.send_json({"type": "home_snapshot", "data": current_payload})
             previous_payload = current_payload
@@ -369,7 +376,7 @@ async def live(websocket: WebSocket) -> None:
         previous_payload = current_payload
 
 
-def _home_payload() -> dict:
+def _home_payload(*, moment_hours: int = 24) -> dict:
     snapshot = connector.snapshot()
     if settings.pbx_type == "asterisk" and snapshot.reachable:
         snapshot = snapshot.__class__(
@@ -389,7 +396,24 @@ def _home_payload() -> dict:
         pbx_type=settings.pbx_type,
         pbx_host=_pbx_host(),
         pbx_port=_pbx_port(),
+        moment_hours=moment_hours,
     )
+
+
+def _moment_hours(request: Request) -> int:
+    return _valid_moment_hours(request.query_params.get("momentHours", ""))
+
+
+def _websocket_moment_hours(websocket: WebSocket) -> int:
+    return _valid_moment_hours(websocket.query_params.get("momentHours", ""))
+
+
+def _valid_moment_hours(value: object) -> int:
+    try:
+        hours = int(str(value))
+    except (TypeError, ValueError):
+        return 24
+    return hours if hours in {1, 3, 6, 12, 24} else 24
 
 
 def _pbx_host() -> str:
@@ -428,6 +452,9 @@ def _json_page(request: Request, title: str, payload: dict) -> str:
     query_token = request.query_params.get("token", "").strip()
     if query_token:
         raw_json_query["token"] = query_token
+    moment_hours = request.query_params.get("momentHours", "").strip()
+    if moment_hours:
+        raw_json_query["momentHours"] = moment_hours
     return _page(
         title=title,
         body=f"""

@@ -198,6 +198,21 @@ The first FreeSWITCH connector reads active channels. More FreeSWITCH-specific
 history, registration, and voicemail observers should be added as connector
 work without changing the app contract.
 
+### GUI PBX Distributions
+
+PBXPulse connects to the PBX engine, not to the web GUI. FreePBX, Issabel, and
+VitalPBX are treated as Asterisk systems and use the AMI connector. FusionPBX is
+treated as a FreeSWITCH system and uses Event Socket. Set
+`PBXPULSE_PBX_TYPE=asterisk` or `PBXPULSE_PBX_TYPE=freeswitch`; the aliases
+`freepbx`, `issabel`, `vitalpbx`, and `fusionpbx` are accepted too.
+
+The main thing that can differ between GUI distributions is filesystem layout:
+CDR CSV location, voicemail spool location, and whether the GUI has already
+created an AMI/ESL user. The Asterisk connector reads PJSIP endpoints and also
+asks AMI for classic `chan_sip` peers when available, which helps older
+FreePBX-style systems. If history or voicemail is missing, check `/diagnostics`
+and adjust `ASTERISK_CDR_CSV_PATH` or `ASTERISK_VOICEMAIL_PATH`.
+
 `PBXPULSE_EXTENSION_NAMES` is optional. PBXPulse first tries to use endpoint
 labels from AMI. Keep the mapping only if your PBX exposes numbers without
 friendly names, or if you want to rename them for the app.
@@ -391,10 +406,10 @@ Recommended release asset layout:
 
 ```text
 agent/dist/
-  PBXPulseAgent-0.1.54-beta-debian-i386.deb
-  PBXPulseAgent-0.1.54-beta-debian-amd64.deb
-  PBXPulseAgent-0.1.54-beta-debian-arm64.deb
-  PBXPulseAgent-0.1.54-beta-linux-source-installer.tar.gz
+  PBXPulseAgent-0.1.58-beta-debian-i386.deb
+  PBXPulseAgent-0.1.58-beta-debian-amd64.deb
+  PBXPulseAgent-0.1.58-beta-debian-arm64.deb
+  PBXPulseAgent-0.1.58-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -405,7 +420,7 @@ systemd service, preserve `/etc/pbxpulse-agent.env`, and create the Python
 virtual environment on the target machine. The source-installer archive is for
 non-Debian Linux systems or manual installs.
 
-For a release tag such as `agent-v0.1.54-beta`, attach the matching files from
+For a release tag such as `agent-v0.1.58-beta`, attach the matching files from
 `agent/dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

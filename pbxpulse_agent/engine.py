@@ -5,9 +5,7 @@ from datetime import datetime
 import re
 from typing import Any
 
-from .history import CdrCall, VoicemailMessage
-
-_MISSED_DISPOSITIONS = {"NO ANSWER", "BUSY", "FAILED", "CONGESTION"}
+from .history import CdrCall, VoicemailMessage, interpreted_call_kind
 
 
 def build_engine_signals(
@@ -39,7 +37,7 @@ def _missed_call_recommendations(
     endpoint_labels = _person_endpoint_labels(endpoints)
     by_destination: dict[str, set[tuple[str, str]]] = {}
     for call in recent_calls:
-        if call.disposition.upper() not in _MISSED_DISPOSITIONS:
+        if interpreted_call_kind(call) != "missed":
             continue
         attempt_key = _call_attempt_key(call)
         for destination in _missed_call_targets(call, endpoint_labels):
@@ -94,14 +92,22 @@ def _call_mix_insights(
     if not recent_calls and not voicemails:
         return []
 
-    answered = sum(1 for call in recent_calls if call.disposition.upper() == "ANSWERED")
+    answered = sum(
+        1 for call in recent_calls if interpreted_call_kind(call) == "answered"
+    )
     missed = _missed_count(recent_calls)
+    ivr_reached = sum(
+        1 for call in recent_calls if interpreted_call_kind(call) == "ivr_reached"
+    )
     voicemail_count = len(voicemails)
-    total = answered + missed + voicemail_count
+    total = answered + missed + ivr_reached + voicemail_count
     if total == 0:
         return []
 
-    if missed == 0 and voicemail_count == 0:
+    if answered == 0 and missed == 0 and ivr_reached > 0 and voicemail_count == 0:
+        title = "Recent callers reached the IVR."
+        body = "PBXPulse saw callers reach the PBX menu without human missed-call pressure."
+    elif missed == 0 and voicemail_count == 0:
         title = "Recent calls are being handled cleanly."
         body = "PBXPulse did not find missed calls or voicemail pressure in the latest history."
     elif missed > answered:
@@ -132,6 +138,7 @@ def _call_mix_insights(
             "technical": {
                 "answered_calls": str(answered),
                 "missed_calls": str(missed),
+                "ivr_reached_calls": str(ivr_reached),
                 "voicemails": str(voicemail_count),
                 "comparison_window": _history_window(recent_calls, now),
             },
@@ -484,7 +491,7 @@ def _missed_count(calls: list[CdrCall]) -> int:
     attempts = {
         _call_attempt_key(call)
         for call in calls
-        if call.disposition.upper() in _MISSED_DISPOSITIONS
+        if interpreted_call_kind(call) == "missed"
     }
     return len(attempts)
 

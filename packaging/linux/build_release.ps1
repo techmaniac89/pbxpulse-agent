@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.54-beta",
+    [string]$Version = "0.1.58-beta",
     [string]$OutputDir = ""
 )
 
@@ -341,3 +341,4 @@ New-SourceInstallerArchive
 New-DebPackage "i386"
 New-DebPackage "amd64"
 New-DebPackage "arm64"
+Remove-Item -Recurse -Force (Join-Path $PackagingRoot "build") -ErrorAction SilentlyContinue

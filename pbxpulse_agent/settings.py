@@ -92,7 +92,11 @@ def _normalize_pbx_type(raw: str) -> str:
         "ami": "asterisk",
         "asteriskami": "asterisk",
         "asterisk": "asterisk",
+        "freepbx": "asterisk",
+        "issabel": "asterisk",
+        "vitalpbx": "asterisk",
         "fs": "freeswitch",
         "freeswitch": "freeswitch",
+        "fusionpbx": "freeswitch",
         "mock": "mock",
     }.get(normalized, normalized or "asterisk")

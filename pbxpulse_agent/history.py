@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+MISSED_CDR_DISPOSITIONS = {"NO ANSWER", "BUSY", "FAILED", "CONGESTION"}
+IVR_REACHED_KIND = "ivr_reached"
+
 
 @dataclass(frozen=True)
 class CdrCall:
@@ -60,6 +63,43 @@ def read_recent_cdr_calls(path: str, *, limit: int = 30) -> list[CdrCall]:
 
     calls.sort(key=lambda call: call.started_at or datetime.min, reverse=True)
     return calls[:limit]
+
+
+def interpreted_call_kind(call: CdrCall) -> str:
+    disposition = call.disposition.upper()
+    if disposition in MISSED_CDR_DISPOSITIONS:
+        return "missed"
+    if disposition != "ANSWERED":
+        return ""
+    if _looks_like_ivr_reached(call):
+        return IVR_REACHED_KIND
+    return "answered"
+
+
+def _looks_like_ivr_reached(call: CdrCall) -> bool:
+    context = call.context.lower()
+    last_app = call.last_app.lower()
+    last_data = call.last_data.lower()
+    destination = call.destination.strip().lower()
+    has_human_channel = bool(call.destination_channel.strip())
+
+    if has_human_channel:
+        return False
+
+    if any(marker in context for marker in ("ivr", "menu", "autoattendant", "auto-attendant")):
+        return True
+
+    if destination in {"s", "i", "t", "h"} and last_app in {
+        "answer",
+        "background",
+        "backgroun",
+        "playback",
+        "read",
+        "waitexten",
+    }:
+        return True
+
+    return "ivr" in last_data or "menu" in last_data
 
 
 def read_recent_voicemails(path: str, *, limit: int = 20) -> list[VoicemailMessage]:

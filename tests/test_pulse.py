@@ -22,10 +22,16 @@ from pbxpulse_agent.history import (
 )
 from pbxpulse_agent.live import home_live_events
 from pbxpulse_agent.pulse import AmiChannel, AmiEndpoint, AmiSnapshot, build_home_payload
-from pbxpulse_agent.settings import AgentSettings
+from pbxpulse_agent.settings import AgentSettings, _normalize_pbx_type
 
 
 class PulseMappingTest(unittest.TestCase):
+    def test_gui_pbx_names_normalize_to_engine_connectors(self) -> None:
+        self.assertEqual(_normalize_pbx_type("freepbx"), "asterisk")
+        self.assertEqual(_normalize_pbx_type("issabel"), "asterisk")
+        self.assertEqual(_normalize_pbx_type("vitalpbx"), "asterisk")
+        self.assertEqual(_normalize_pbx_type("fusionpbx"), "freeswitch")
+
     def test_connector_factory_can_select_freeswitch(self) -> None:
         settings = AgentSettings(
             mode="freeswitch",
@@ -115,6 +121,34 @@ class PulseMappingTest(unittest.TestCase):
         )
 
         self.assertEqual(endpoints[0].device_state, "Unreachable")
+
+    def test_chan_sip_peers_map_to_endpoints(self) -> None:
+        endpoints = _endpoints_from_events(
+            [
+                AmiEvent(
+                    name="PeerEntry",
+                    fields={
+                        "ObjectName": "102",
+                        "Status": "OK (12 ms)",
+                        "Description": "Warehouse phone",
+                    },
+                ),
+                AmiEvent(
+                    name="PeerEntry",
+                    fields={
+                        "ObjectName": "cosmote",
+                        "Status": "Unreachable",
+                        "Description": "Cosmote SIP trunk",
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(endpoints[0].extension, "102")
+        self.assertEqual(endpoints[0].device_state, "Reachable")
+        self.assertEqual(endpoints[0].role, "extension")
+        self.assertEqual(endpoints[1].device_state, "Unreachable")
+        self.assertEqual(endpoints[1].role, "trunk")
 
     def test_pjsip_uri_can_provide_trunk_number(self) -> None:
         self.assertEqual(
@@ -712,7 +746,7 @@ class PulseMappingTest(unittest.TestCase):
         self.assertEqual(payload["now"]["title"], "The office is quiet.")
         self.assertIn("Linphone missed Support.", [call["title"] for call in payload["calls"]])
 
-    def test_reachable_payload_always_includes_a_24_hour_moment_signal(self) -> None:
+    def test_reachable_payload_includes_a_configurable_moment_signal(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
         recent_record = CdrCall(
             source="101",
@@ -738,6 +772,7 @@ class PulseMappingTest(unittest.TestCase):
             display_name="Office PBX",
             extension_names={},
             now=now,
+            moment_hours=3,
         )
 
         moments = [
@@ -749,12 +784,14 @@ class PulseMappingTest(unittest.TestCase):
             {
                 "pbx_daily_flow_moment",
                 "pbx_answered_cleanly_moment",
-                "pbx_quieter_than_yesterday_moment",
+                "pbx_quieter_than_previous_window_moment",
             },
         )
-        self.assertEqual(moments[0]["timeLabel"], "Last 24 hours")
+        self.assertEqual(moments[0]["timeLabel"], "Last 3 hours")
         self.assertEqual(moments[0]["technical"]["recent_calls"], "1")
         self.assertEqual(moments[0]["technical"]["answered_calls"], "1")
+        self.assertEqual(moments[0]["technical"]["moment_hours"], "3")
+        self.assertEqual(moments[0]["technical"]["visible_window"], "last 3 hours")
         self.assertIn("moment_pool", moments[0]["technical"])
 
     def test_daily_moment_rotates_calm_wording_by_day(self) -> None:

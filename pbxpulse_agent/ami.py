@@ -101,6 +101,13 @@ class AmiClient:
                     complete_event="ContactListComplete",
                 )
             )
+            events.extend(
+                self._collect_optional_action_events(
+                    sock,
+                    action="SIPpeers",
+                    complete_event="PeerlistComplete",
+                )
+            )
 
             self._send_action(sock, {"Action": "Logoff"})
             return events
@@ -258,10 +265,15 @@ def _endpoints_from_events(events: list[AmiEvent]) -> list[AmiEndpoint]:
     endpoints: list[AmiEndpoint] = []
     contact_states = _contact_states_from_events(events)
     for event in events:
-        if event.name != "EndpointList":
+        if event.name not in {"EndpointList", "PeerEntry"}:
             continue
         fields = event.fields
-        extension = fields.get("ObjectName", "") or fields.get("Endpoint", "")
+        extension = (
+            fields.get("ObjectName", "")
+            or fields.get("Endpoint", "")
+            or fields.get("Peer", "")
+            or fields.get("PeerName", "")
+        )
         if not extension:
             continue
         device_state = (
@@ -270,6 +282,8 @@ def _endpoints_from_events(events: list[AmiEvent]) -> list[AmiEndpoint]:
             or fields.get("Contacts", "")
             or fields.get("Status", "")
         )
+        if event.name == "PeerEntry":
+            device_state = _sip_peer_device_state(fields.get("Status", ""))
         endpoints.append(
             AmiEndpoint(
                 extension=extension,
@@ -289,6 +303,15 @@ def _endpoints_from_events(events: list[AmiEvent]) -> list[AmiEndpoint]:
             )
         )
     return endpoints
+
+
+def _sip_peer_device_state(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized.startswith("ok") or normalized.startswith("lagged"):
+        return "Reachable"
+    if any(marker in normalized for marker in ("unreachable", "unknown", "rejected")):
+        return "Unreachable"
+    return status
 
 
 def _contact_states_from_events(events: list[AmiEvent]) -> dict[str, list[str]]:

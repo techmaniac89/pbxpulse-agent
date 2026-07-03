@@ -5,9 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .engine import build_engine_signals
-from .history import CdrCall, VoicemailMessage
-
-_MISSED_HISTORY_DISPOSITIONS = {"NO ANSWER", "BUSY", "FAILED", "CONGESTION"}
+from .history import CdrCall, VoicemailMessage, interpreted_call_kind
 
 
 @dataclass(frozen=True)
@@ -56,8 +54,10 @@ def build_home_payload(
     pbx_type: str = "asterisk",
     pbx_host: str = "",
     pbx_port: int | str = "",
+    moment_hours: int = 24,
 ) -> dict:
     now = now or _now(timezone_name)
+    moment_hours = _valid_moment_hours(moment_hours)
     active_channels = [
         channel for channel in snapshot.channels if _is_active_channel(channel)
     ]
@@ -104,6 +104,7 @@ def build_home_payload(
         endpoint_roles,
         endpoint_numbers,
         now,
+        moment_hours,
     )
     signals.extend(
         build_engine_signals(
@@ -224,6 +225,7 @@ def _build_signals(
     endpoint_roles: dict[str, str],
     endpoint_numbers: dict[str, str],
     now: datetime,
+    moment_hours: int,
 ) -> list[dict]:
     signals: list[dict] = []
 
@@ -358,7 +360,7 @@ def _build_signals(
                 }
             )
 
-    signals.extend(_moment_signals(snapshot, active_channels, now))
+    signals.extend(_moment_signals(snapshot, active_channels, now, moment_hours))
 
     return signals
 
@@ -367,9 +369,11 @@ def _moment_signals(
     snapshot: AmiSnapshot,
     active_channels: list[AmiChannel],
     now: datetime,
+    moment_hours: int,
 ) -> list[dict]:
-    recent_calls = _calls_in_last_24_hours(snapshot.recent_calls, now)
-    signal_id = f"sig_moment_{now.date().isoformat()}"
+    recent_calls = _calls_in_window(snapshot.recent_calls, now, moment_hours)
+    signal_id = f"sig_moment_{now.date().isoformat()}_{moment_hours}h"
+    window_label = _moment_window_label(moment_hours)
 
     if active_channels:
         active_count = len(_dedupe_call_channels(active_channels))
@@ -390,12 +394,17 @@ def _moment_signals(
                 ],
                 "technical": {
                     "active_calls": str(active_count),
-                    "visible_window": "24 hours",
+                    "visible_window": window_label,
                 },
             }
         ]
 
-    moment = _daily_behavior_moment(snapshot.recent_calls, recent_calls, now)
+    moment = _daily_behavior_moment(
+        snapshot.recent_calls,
+        recent_calls,
+        now,
+        moment_hours,
+    )
     return [
         {
             "id": signal_id,
@@ -405,7 +414,7 @@ def _moment_signals(
             "state": "active",
             "title": moment["title"],
             "body": moment["body"],
-            "timeLabel": "Last 24 hours",
+            "timeLabel": _moment_time_label(moment_hours),
             "actionLabel": None,
             "why": [
                 "The PBX connector responded successfully.",
@@ -414,7 +423,7 @@ def _moment_signals(
             ],
             "technical": {
                 **moment["technical"],
-                "visible_window": "24 hours",
+                "visible_window": window_label,
                 "moment_pool": moment["pool"],
             },
         }
@@ -425,14 +434,17 @@ def _daily_behavior_moment(
     all_calls: list[CdrCall],
     recent_calls: list[CdrCall],
     now: datetime,
+    moment_hours: int,
 ) -> dict:
-    recent_answered = _disposition_count(recent_calls, "ANSWERED")
-    recent_missed = _missed_history_count(recent_calls)
-    yesterday_calls = _calls_between(
+    recent_answered = _history_kind_count(recent_calls, "answered")
+    recent_missed = _history_kind_count(recent_calls, "missed")
+    recent_ivr_reached = _history_kind_count(recent_calls, "ivr_reached")
+    previous_window_calls = _calls_between(
         all_calls,
-        now.replace(tzinfo=None) - timedelta(hours=48),
-        now.replace(tzinfo=None) - timedelta(hours=24),
+        now.replace(tzinfo=None) - timedelta(hours=moment_hours * 2),
+        now.replace(tzinfo=None) - timedelta(hours=moment_hours),
     )
+    window_label = _moment_window_label(moment_hours)
     busiest_hour = _busiest_hour_label(recent_calls)
     pool: list[dict] = []
 
@@ -441,9 +453,9 @@ def _daily_behavior_moment(
         pool.append(
             {
                 "kind": "pbx_daily_flow_moment",
-                "title": f"{len(recent_calls)} {call_word} passed through in the last 24 hours.",
+                "title": f"{len(recent_calls)} {call_word} passed through in the {window_label}.",
                 "body": "PBXPulse sees the day's call flow and is keeping a calm eye on it.",
-                "why": "PBXPulse counted recent call history inside the last 24 hours.",
+                "why": f"PBXPulse counted recent call history inside the {window_label}.",
             }
         )
 
@@ -452,7 +464,7 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_answered_cleanly_moment",
                 "title": "Recent calls are being answered cleanly.",
-                "body": "PBXPulse found answered calls without missed-call pressure in the last 24 hours.",
+                "body": f"PBXPulse found answered calls without missed-call pressure in the {window_label}.",
                 "why": "Recent call history has answered calls and no missed calls.",
             }
         )
@@ -462,7 +474,7 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_missed_weight_moment",
                 "title": "Missed calls shaped the day more than answered calls.",
-                "body": "PBXPulse noticed the last 24 hours leaned toward calls that did not connect.",
+                "body": f"PBXPulse noticed the {window_label} leaned toward calls that did not connect.",
                 "why": "Missed calls outnumbered answered calls in recent history.",
             }
         )
@@ -473,28 +485,28 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_busy_hour_moment",
                 "title": f"Calls clustered around {hour}.",
-                "body": f"{count} call(s) landed in that hour during the last 24 hours.",
+                "body": f"{count} call(s) landed in that hour during the {window_label}.",
                 "why": "PBXPulse grouped recent calls by hour and found the busiest one.",
             }
         )
 
-    if yesterday_calls:
-        if len(recent_calls) >= max(3, len(yesterday_calls) * 1.5):
+    if previous_window_calls:
+        if len(recent_calls) >= max(3, len(previous_window_calls) * 1.5):
             pool.append(
                 {
-                    "kind": "pbx_busier_than_yesterday_moment",
-                    "title": "The PBX is busier than yesterday.",
-                    "body": "The last 24 hours have more visible call flow than the previous day.",
-                    "why": "PBXPulse compared the last 24 hours with the 24 hours before that.",
+                    "kind": "pbx_busier_than_previous_window_moment",
+                    "title": "The PBX is busier than the previous window.",
+                    "body": f"The {window_label} has more visible call flow than the window before it.",
+                    "why": f"PBXPulse compared the {window_label} with the same period before it.",
                 }
             )
-        elif len(recent_calls) <= max(1, len(yesterday_calls) * 0.45):
+        elif len(recent_calls) <= max(1, len(previous_window_calls) * 0.45):
             pool.append(
                 {
-                    "kind": "pbx_quieter_than_yesterday_moment",
-                    "title": "The PBX is quieter than yesterday.",
-                    "body": "The last 24 hours have less visible call flow than the previous day.",
-                    "why": "PBXPulse compared the last 24 hours with the 24 hours before that.",
+                    "kind": "pbx_quieter_than_previous_window_moment",
+                    "title": "The PBX is quieter than the previous window.",
+                    "body": f"The {window_label} has less visible call flow than the window before it.",
+                    "why": f"PBXPulse compared the {window_label} with the same period before it.",
                 }
             )
 
@@ -524,21 +536,36 @@ def _daily_behavior_moment(
     selected = pool[now.toordinal() % len(pool)]
     selected["technical"] = {
         "recent_calls": str(len(recent_calls)),
-        "previous_24h_calls": str(len(yesterday_calls)),
+        "previous_window_calls": str(len(previous_window_calls)),
         "answered_calls": str(recent_answered),
         "missed_calls": str(recent_missed),
+        "ivr_reached_calls": str(recent_ivr_reached),
+        "moment_hours": str(moment_hours),
     }
     selected["pool"] = ",".join(item["kind"] for item in pool)
     return selected
 
 
-def _calls_in_last_24_hours(
+def _calls_in_window(
     calls: list[CdrCall],
     now: datetime,
+    hours: int,
 ) -> list[CdrCall]:
-    window_start = now.replace(tzinfo=None) - timedelta(hours=24)
+    window_start = now.replace(tzinfo=None) - timedelta(hours=hours)
     window_end = now.replace(tzinfo=None)
     return _calls_between(calls, window_start, window_end)
+
+
+def _valid_moment_hours(hours: int) -> int:
+    return hours if hours in {1, 3, 6, 12, 24} else 24
+
+
+def _moment_window_label(hours: int) -> str:
+    return f"last {hours} hours"
+
+
+def _moment_time_label(hours: int) -> str:
+    return f"Last {hours} hours"
 
 
 def _calls_between(
@@ -554,16 +581,8 @@ def _calls_between(
     ]
 
 
-def _disposition_count(calls: list[CdrCall], disposition: str) -> int:
-    return sum(1 for call in calls if call.disposition.upper() == disposition)
-
-
-def _missed_history_count(calls: list[CdrCall]) -> int:
-    return sum(
-        1
-        for call in calls
-        if call.disposition.upper() in _MISSED_HISTORY_DISPOSITIONS
-    )
+def _history_kind_count(calls: list[CdrCall], kind: str) -> int:
+    return sum(1 for call in calls if interpreted_call_kind(call) == kind)
 
 
 def _busiest_hour_label(calls: list[CdrCall]) -> tuple[str, int] | None:
@@ -703,12 +722,16 @@ def _calls_from_history(
             endpoint_roles,
             endpoint_numbers,
         )
-        disposition = record.disposition.upper()
-        if disposition == "ANSWERED":
+        interpreted_kind = interpreted_call_kind(record)
+        if interpreted_kind == "answered":
             kind = "answered"
             title = f"{source} called {destination}."
             body = _duration_body(record.duration_seconds)
-        elif disposition in {"NO ANSWER", "BUSY", "FAILED", "CONGESTION"}:
+        elif interpreted_kind == "ivr_reached":
+            kind = "ivr_reached"
+            title = f"{source} reached the IVR."
+            body = "The call reached the PBX menu."
+        elif interpreted_kind == "missed":
             kind = "missed"
             title = f"{source} missed {destination}."
             body = "The call did not connect."

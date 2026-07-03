@@ -19,8 +19,18 @@ PBX connector
 | PBX | Connector | Status |
 | --- | --- | --- |
 | Asterisk | `ami.py` | Active calls, endpoints, trunks, CDR history, voicemail |
+| FreePBX, Issabel, VitalPBX | `ami.py` | Supported as Asterisk-based systems |
 | FreeSWITCH | `freeswitch.py` | Event Socket connection and active channels |
+| FusionPBX | `freeswitch.py` | Supported as a FreeSWITCH-based system |
 | Mock | `mock.py` | Development/test fixture |
+
+GUI PBX distributions are handled through the PBX engine underneath them.
+FreePBX, Issabel, and VitalPBX still expose Asterisk AMI. FusionPBX still
+uses FreeSWITCH Event Socket. Their web interfaces do not need separate
+connectors unless PBXPulse later wants distribution-specific settings,
+provisioning, or dashboard metadata. The Asterisk connector reads PJSIP
+endpoints and also asks for classic `chan_sip` peers when that AMI action is
+available.
 
 ## Add A Connector
 
