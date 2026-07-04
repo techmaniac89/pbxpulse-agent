@@ -23,10 +23,10 @@ archives preserve executable modes.
 The installer:
 
 - Installs Python runtime packages when `apt-get` is available.
-- Auto-detects local Asterisk or FreeSWITCH files and commands when possible.
-- Lets you confirm `asterisk`, `freeswitch`, or `mock` mode interactively.
+- Auto-detects local Asterisk, FreeSWITCH, or 3CX files and commands when possible.
+- Lets you confirm `asterisk`, `freeswitch`, `3cx`, or `mock` mode interactively.
 - Prompts for timezone, Agent port, and connector timeout.
-- Prompts for AMI or ESL credentials and keeps existing values on reinstall.
+- Prompts for AMI, ESL, or 3CX API credentials and keeps existing values on reinstall.
 - Suggests Asterisk CDR CSV and voicemail paths from common local locations.
 - Reuses a readable Asterisk `manager.conf` user secret or FreeSWITCH Event
   Socket password as a default when it can find one.
@@ -37,9 +37,9 @@ The installer:
 - Creates and starts `pbxpulse-agent.service`.
 - Runs Uvicorn on `0.0.0.0:8765` by default.
 
-The installer writes Agent settings only. It does not edit Asterisk or
-FreeSWITCH server configuration, so AMI/ESL must still be enabled and permitted
-on the PBX side.
+The installer writes Agent settings only. It does not edit PBX server
+configuration, so AMI, ESL, or 3CX API access must still be enabled and
+permitted on the PBX side.
 
 After install, review the environment file for the target PBX:
 
@@ -145,6 +145,8 @@ PBXPULSE_DISPLAY_NAME=FreeSWITCH
 FREESWITCH_ESL_HOST=127.0.0.1
 FREESWITCH_ESL_PORT=8021
 FREESWITCH_ESL_PASSWORD=<event_socket password>
+FREESWITCH_CDR_JSON_PATH=
+FREESWITCH_VOICEMAIL_PATH=
 ```
 
 The standard password location is:
@@ -157,6 +159,38 @@ When that file is readable, the installer can use its password value as the
 default ESL password prompt. It does not edit FreeSWITCH configuration.
 
 FusionPBX uses the FreeSWITCH connector.
+
+Set `FREESWITCH_CDR_JSON_PATH` only when `mod_json_cdr` writes local JSON CDR
+files visible to the Agent. Set `FREESWITCH_VOICEMAIL_PATH` only when
+FreeSWITCH voicemail metadata files are visible to the Agent.
+
+## 3CX Install Notes
+
+3CX uses HTTP API access:
+
+```text
+PBXPULSE_PBX_TYPE=3cx
+PBXPULSE_AGENT_MODE=3cx
+PBXPULSE_DISPLAY_NAME=3CX
+THREECX_DEPLOYMENT=cloud
+THREECX_BASE_URL=https://pbx.example.com
+THREECX_CLIENT_ID=<client id>
+THREECX_CLIENT_SECRET=<client secret>
+THREECX_AUTH_PATH=/connect/token
+THREECX_TEST_PATH=/xapi/v1/Defs?$select=Id
+THREECX_ACTIVE_CALLS_PATH=/callcontrol
+THREECX_USERS_PATH=/xapi/v1/Users
+THREECX_CALL_HISTORY_PATH=/xapi/v1/CallHistoryView
+THREECX_VOICEMAILS_PATH=/xapi/v1/Voicemails
+```
+
+During install, choose whether the 3CX instance is `local` or `cloud`. Local 3CX
+uses the same API connector, but defaults the URL toward a local HTTPS endpoint.
+Cloud 3CX does not use local CDR or voicemail paths; all data comes from the 3CX
+API. The connector maps active calls, users/extensions, call history, IVR/menu
+history rows, and voicemail rows. Endpoint path overrides are available because
+3CX API paths can vary by version and enabled API access. Recordings are not
+read yet.
 
 ## Docker Compose Install
 

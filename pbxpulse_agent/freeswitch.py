@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import socket
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from .history import CdrCall, VoicemailMessage
 from .pulse import AmiChannel, AmiEndpoint, AmiSnapshot
 from .settings import AgentSettings
 from .version import AGENT_VERSION
@@ -36,6 +39,12 @@ class FreeSwitchClient:
                 agent_version=AGENT_VERSION,
                 channels=channels,
                 endpoints=endpoints,
+                recent_calls=_read_json_cdr_calls(
+                    self._settings.freeswitch_cdr_json_path,
+                ),
+                voicemails=_read_voicemails(
+                    self._settings.freeswitch_voicemail_path,
+                ),
             )
         except OSError as exc:
             return AmiSnapshot(
@@ -53,6 +62,10 @@ class FreeSwitchClient:
             "tcpConnected": False,
             "loginAccepted": False,
             "commandAccepted": False,
+            "cdrJsonPath": self._settings.freeswitch_cdr_json_path,
+            "cdrJsonReadable": _is_dir(self._settings.freeswitch_cdr_json_path),
+            "voicemailPath": self._settings.freeswitch_voicemail_path,
+            "voicemailPathReadable": _is_dir(self._settings.freeswitch_voicemail_path),
         }
 
         try:
@@ -217,6 +230,168 @@ def _channel_from_row(row: dict[str, Any]) -> AmiChannel:
         unique_id=_string(row, "uuid"),
         linked_id=_string(row, "bleg_uuid", "call_uuid", "uuid"),
     )
+
+
+def _read_json_cdr_calls(path: str, *, limit: int = 1000) -> list[CdrCall]:
+    root = Path(path) if path else None
+    if root is None or not _safe_is_dir(root):
+        return []
+
+    files = _recent_files(root, "*.json", limit * 3)
+    calls: list[CdrCall] = []
+    for file in files:
+        try:
+            data = json.loads(file.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        row = _flatten_json_cdr(data)
+        calls.append(
+            CdrCall(
+                source=_string(row, "caller_id_number", "cid_num", "caller", "from"),
+                destination=_string(row, "destination_number", "dest", "callee", "to"),
+                disposition=_cdr_disposition(row),
+                started_at=_parse_datetime(
+                    _string(row, "start_stamp", "created_time", "start_epoch")
+                ),
+                duration_seconds=_parse_int(
+                    _string(row, "duration", "billsec", "billsec_seconds")
+                ),
+                context=_string(row, "context", "dialplan", "section"),
+                channel=_string(row, "channel_name", "uuid"),
+                destination_channel=_string(row, "bridge_uuid", "bleg_uuid"),
+                last_app=_string(row, "last_app", "application"),
+                last_data=_string(row, "last_arg", "application_data"),
+            )
+        )
+
+    calls.sort(key=lambda call: call.started_at or datetime.min, reverse=True)
+    return calls[:limit]
+
+
+def _read_voicemails(path: str, *, limit: int = 100) -> list[VoicemailMessage]:
+    root = Path(path) if path else None
+    if root is None or not _safe_is_dir(root):
+        return []
+
+    messages: list[VoicemailMessage] = []
+    for file in _recent_files(root, "*.txt", limit):
+        metadata = _key_value_file(file)
+        mailbox = _string(metadata, "username", "mailbox", "extension") or file.parent.name
+        caller = _string(metadata, "caller_id_name", "caller_id_number", "caller")
+        messages.append(
+            VoicemailMessage(
+                mailbox=mailbox,
+                caller=caller or "A caller",
+                created_at=_parse_datetime(
+                    _string(metadata, "created_epoch", "created", "timestamp")
+                ),
+            )
+        )
+    return messages
+
+
+def _flatten_json_cdr(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    flattened: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                flattened.setdefault(str(nested_key), nested_value)
+                flattened.setdefault(f"{key}_{nested_key}", nested_value)
+        else:
+            flattened[str(key)] = value
+    variables = data.get("variables")
+    if isinstance(variables, dict):
+        flattened.update({str(key): value for key, value in variables.items()})
+    callflow = data.get("callflow")
+    if isinstance(callflow, list) and callflow:
+        first = callflow[0]
+        if isinstance(first, dict):
+            flattened.update(_flatten_json_cdr(first))
+    return flattened
+
+
+def _cdr_disposition(row: dict[str, Any]) -> str:
+    raw = _string(row, "hangup_cause", "disposition", "status")
+    normalized = raw.lower()
+    if any(marker in normalized for marker in ("no_answer", "no answer", "originator_cancel")):
+        return "NO ANSWER"
+    if "busy" in normalized:
+        return "BUSY"
+    if any(marker in normalized for marker in ("fail", "error", "unallocated")):
+        return "FAILED"
+    return "ANSWERED" if raw else "ANSWERED"
+
+
+def _recent_files(root: Path, pattern: str, limit: int) -> list[Path]:
+    try:
+        files = [file for file in root.rglob(pattern) if file.is_file()]
+    except OSError:
+        return []
+    files.sort(key=lambda file: _mtime(file), reverse=True)
+    return files[:limit]
+
+
+def _key_value_file(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return result
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key.strip()] = value.strip().strip('"')
+    return result
+
+
+def _parse_datetime(raw: str) -> datetime | None:
+    value = raw.strip()
+    if not value:
+        return None
+    if value.isdigit():
+        try:
+            return datetime.fromtimestamp(int(value))
+        except (OSError, ValueError):
+            return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).replace(tzinfo=None)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_int(raw: str) -> int:
+    try:
+        return int(float(raw.strip()))
+    except ValueError:
+        return 0
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0
+
+
+def _is_dir(path: str) -> bool:
+    return _safe_is_dir(Path(path)) if path else False
+
+
+def _safe_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _endpoint_from_channel(value: str) -> str:

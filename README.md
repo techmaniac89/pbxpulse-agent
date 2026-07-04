@@ -6,7 +6,7 @@ and exposes a small PBXPulse-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
-Agent; the Agent talks to Asterisk, FreeSWITCH, or a development mock connector.
+Agent; the Agent talks to Asterisk, FreeSWITCH, 3CX, or a development mock connector.
 This keeps AMI, ESL, SIP details, filesystem paths, and distro-specific quirks
 out of the user-facing PBXPulse experience.
 
@@ -36,6 +36,7 @@ The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 
 - Asterisk through AMI.
 - FreeSWITCH through Event Socket.
+- 3CX through HTTP APIs.
 - Mock connector for local development and UI testing.
 
 GUI PBX distributions are mapped to their underlying PBX engine:
@@ -97,14 +98,15 @@ http://<agent-host>:8765/pair?token=<PBXPULSE_AGENT_TOKEN>
 The Agent is configured through environment variables. The most important ones
 are:
 
-- `PBXPULSE_PBX_TYPE`: `asterisk`, `freeswitch`, or `mock`.
-- `PBXPULSE_AGENT_MODE`: connector mode; normally `ami`, `freeswitch`, or
+- `PBXPULSE_PBX_TYPE`: `asterisk`, `freeswitch`, `3cx`, or `mock`.
+- `PBXPULSE_AGENT_MODE`: connector mode; normally `ami`, `freeswitch`, `3cx`, or
   `mock`.
 - `PBXPULSE_DISPLAY_NAME`: friendly name shown by the Agent.
 - `PBXPULSE_TIMEZONE`: IANA timezone used for timestamps and history.
 - `PBXPULSE_AGENT_TOKEN`: optional shared token for pairing and remote access.
 - `ASTERISK_AMI_*`: Asterisk AMI host, port, username, password, and timeout.
 - `FREESWITCH_ESL_*`: FreeSWITCH Event Socket host, port, and password.
+- `THREECX_*`: 3CX base URL, API credentials, and endpoint paths.
 - `ASTERISK_CDR_CSV_PATH`: Asterisk CDR CSV path for call history.
 - `ASTERISK_VOICEMAIL_PATH`: Asterisk voicemail spool path.
 
@@ -155,10 +157,10 @@ archives preserve executable modes.
 The installer:
 
 - Installs Python runtime packages when `apt-get` is available.
-- Auto-detects local Asterisk or FreeSWITCH files and commands when possible.
-- Lets you confirm `asterisk`, `freeswitch`, or `mock` mode interactively.
+- Auto-detects local Asterisk, FreeSWITCH, or 3CX files and commands when possible.
+- Lets you confirm `asterisk`, `freeswitch`, `3cx`, or `mock` mode interactively.
 - Prompts for timezone, Agent port, and connector timeout.
-- Prompts for AMI or ESL credentials and preserves existing values on reinstall.
+- Prompts for AMI, ESL, or 3CX API credentials and preserves existing values on reinstall.
 - Suggests Asterisk CDR CSV and voicemail paths from common local locations.
 - Reuses a readable Asterisk `manager.conf` user secret or FreeSWITCH Event
   Socket password as a default when it can find one.
@@ -170,9 +172,9 @@ The installer:
 - Copies the Agent code, scripts, docs, compose examples, and support files.
 - Creates and starts `pbxpulse-agent.service`.
 
-The installer writes Agent settings only. It does not edit Asterisk or
-FreeSWITCH server configuration, so AMI/ESL must still be enabled and permitted
-on the PBX side.
+The installer writes Agent settings only. It does not edit PBX server
+configuration, so AMI, ESL, or 3CX API access must still be enabled and
+permitted on the PBX side.
 
 After install, review `/etc/pbxpulse-agent.env`. If you change connector
 credentials, timezone, or file paths, restart the service.
@@ -222,6 +224,7 @@ Supported values today:
 ```text
 asterisk
 freeswitch
+3cx
 mock
 ```
 
@@ -308,6 +311,8 @@ PBXPULSE_PBX_TYPE=freeswitch
 FREESWITCH_ESL_HOST=127.0.0.1
 FREESWITCH_ESL_PORT=8021
 FREESWITCH_ESL_PASSWORD=<event_socket password>
+FREESWITCH_CDR_JSON_PATH=
+FREESWITCH_VOICEMAIL_PATH=
 ```
 
 Read the password from your FreeSWITCH configuration and place it in
@@ -317,17 +322,43 @@ Read the password from your FreeSWITCH configuration and place it in
 /etc/freeswitch/autoload_configs/event_socket.conf.xml
 ```
 
-The first FreeSWITCH connector reads active channels. More FreeSWITCH-specific
-history, registration, and voicemail observers should be added as connector
-work without changing the app contract.
+The FreeSWITCH connector reads active channels through ESL. Optional local JSON
+CDR and voicemail metadata paths can add history and voicemail evidence when
+those FreeSWITCH modules/files are available.
+
+### 3CX Defaults
+
+For 3CX, configure API access:
+
+```text
+PBXPULSE_PBX_TYPE=3cx
+PBXPULSE_AGENT_MODE=3cx
+PBXPULSE_DISPLAY_NAME=3CX
+THREECX_DEPLOYMENT=cloud
+THREECX_BASE_URL=https://pbx.example.com
+THREECX_CLIENT_ID=<client id>
+THREECX_CLIENT_SECRET=<client secret>
+THREECX_AUTH_PATH=/connect/token
+THREECX_TEST_PATH=/xapi/v1/Defs?$select=Id
+THREECX_ACTIVE_CALLS_PATH=/callcontrol
+THREECX_USERS_PATH=/xapi/v1/Users
+THREECX_CALL_HISTORY_PATH=/xapi/v1/CallHistoryView
+THREECX_VOICEMAILS_PATH=/xapi/v1/Voicemails
+```
+
+The installer asks whether 3CX is `local` or `cloud`. Both use the HTTP API.
+Cloud 3CX uses no local CDR or voicemail paths; all data comes from API
+endpoints. The 3CX connector maps active calls, users/extensions, call history,
+IVR/menu history rows, and voicemail rows. Recordings are not read yet.
 
 ### GUI PBX Distributions
 
 PBXPulse connects to the PBX engine, not to the web GUI. FreePBX, Issabel, and
 VitalPBX are treated as Asterisk systems and use the AMI connector. FusionPBX is
-treated as a FreeSWITCH system and uses Event Socket. Set
-`PBXPULSE_PBX_TYPE=asterisk` or `PBXPULSE_PBX_TYPE=freeswitch`; the aliases
-`freepbx`, `issabel`, `vitalpbx`, and `fusionpbx` are accepted too.
+treated as a FreeSWITCH system and uses Event Socket. 3CX uses its own API
+connector. Set `PBXPULSE_PBX_TYPE=asterisk`, `PBXPULSE_PBX_TYPE=freeswitch`, or
+`PBXPULSE_PBX_TYPE=3cx`; the aliases `freepbx`, `issabel`, `vitalpbx`,
+`fusionpbx`, and `threecx` are accepted too.
 
 The main thing that can differ between GUI distributions is filesystem layout:
 CDR CSV location, voicemail spool location, and whether the GUI has already
@@ -530,7 +561,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXPulseAgent-0.2.0-beta-linux-source-installer.tar.gz
+  PBXPulseAgent-0.2.2-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -541,7 +572,7 @@ uninstall script. It installs under `/opt/pbxpulse-agent`, creates the systemd
 service, writes `/etc/pbxpulse-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.2.0-beta`, attach the matching files from
+For a release tag such as `agent-v0.2.2-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

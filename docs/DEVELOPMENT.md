@@ -58,6 +58,7 @@ pbxpulse_agent/
   connectors.py    Connector protocol and connector selection
   ami.py           Asterisk AMI connector
   freeswitch.py    FreeSWITCH Event Socket connector
+  threecx.py       3CX HTTP API connector
   mock.py          Development fixture connector
   pulse.py         PBXPulse Home payload and signal generation
   history.py       CDR and voicemail evidence readers

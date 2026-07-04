@@ -66,6 +66,7 @@ normalize_pbx_type() {
   case "$normalized" in
     ami|asteriskami|asterisk|freepbx|issabel|vitalpbx) printf '%s\n' "asterisk" ;;
     fs|freeswitch|fusionpbx) printf '%s\n' "freeswitch" ;;
+    3cx|threecx) printf '%s\n' "3cx" ;;
     mock) printf '%s\n' "mock" ;;
     *) printf '%s\n' "$1" ;;
   esac
@@ -164,6 +165,56 @@ detect_freeswitch() {
   command -v fs_cli >/dev/null 2>&1 || [ -d /etc/freeswitch ]
 }
 
+detect_3cx() {
+  [ -d /var/lib/3cxpbx ] || [ -d /etc/3cxpbx ] || command -v 3CXPhoneSystem >/dev/null 2>&1
+}
+
+normalize_3cx_deployment() {
+  normalized="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '_' | tr -d '-' | tr -d '[:space:]')"
+  case "$normalized" in
+    local|selfhosted|selfhost|onprem|onpremise|onpremises) printf '%s\n' "local" ;;
+    cloud|hosted|saas|3cxhosted) printf '%s\n' "cloud" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+choose_3cx_deployment() {
+  current="$(env_value THREECX_DEPLOYMENT)"
+  if [ -n "$current" ]; then
+    normalize_3cx_deployment "$current"
+    return
+  fi
+
+  detected="cloud"
+  if detect_3cx; then
+    detected="local"
+  fi
+
+  if is_interactive; then
+    printf "3CX deployment: local or cloud [%s]: " "$detected" >&2
+    read -r answer
+    if [ -n "$answer" ]; then
+      detected="$answer"
+    fi
+  fi
+
+  normalize_3cx_deployment "$detected"
+}
+
+default_3cx_base_url() {
+  deployment="$1"
+  current="$(env_value THREECX_BASE_URL)"
+  if [ -n "$current" ] && [ "$current" != "https://pbx.example.com" ]; then
+    printf '%s\n' "$current"
+    return
+  fi
+  if [ "$deployment" = "local" ]; then
+    printf '%s\n' "${THREECX_BASE_URL:-https://127.0.0.1:5001}"
+    return
+  fi
+  printf '%s\n' "${THREECX_BASE_URL:-https://pbx.example.com}"
+}
+
 detect_ami_credentials() {
   manager_conf="/etc/asterisk/manager.conf"
   if [ ! -r "$manager_conf" ]; then
@@ -212,13 +263,17 @@ choose_pbx_type() {
 
   has_asterisk=0
   has_freeswitch=0
+  has_3cx=0
   detect_asterisk && has_asterisk=1
   detect_freeswitch && has_freeswitch=1
+  detect_3cx && has_3cx=1
 
   detected="asterisk"
-  if [ "$has_freeswitch" -eq 1 ] && [ "$has_asterisk" -eq 0 ]; then
+  if [ "$has_3cx" -eq 1 ] && [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ]; then
+    detected="3cx"
+  elif [ "$has_freeswitch" -eq 1 ] && [ "$has_asterisk" -eq 0 ]; then
     detected="freeswitch"
-  elif [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ]; then
+  elif [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && [ "$has_3cx" -eq 0 ]; then
     detected="asterisk"
   fi
 
@@ -226,8 +281,9 @@ choose_pbx_type() {
     echo "PBX detection:" >&2
     [ "$has_asterisk" -eq 1 ] && echo "  - Asterisk files or commands found." >&2
     [ "$has_freeswitch" -eq 1 ] && echo "  - FreeSWITCH files or commands found." >&2
-    [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && echo "  - No local PBX files found; using Asterisk defaults." >&2
-    printf "PBX type: asterisk, freeswitch, or mock [%s]: " "$detected" >&2
+    [ "$has_3cx" -eq 1 ] && echo "  - 3CX files or commands found." >&2
+    [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && [ "$has_3cx" -eq 0 ] && echo "  - No local PBX files found; using Asterisk defaults." >&2
+    printf "PBX type: asterisk, freeswitch, 3cx, or mock [%s]: " "$detected" >&2
     read -r answer
     if [ -n "$answer" ]; then
       detected="$answer"
@@ -272,6 +328,32 @@ configure_freeswitch_env() {
   prompt_value FREESWITCH_ESL_HOST "FreeSWITCH ESL host" "${FREESWITCH_ESL_HOST:-127.0.0.1}"
   prompt_value FREESWITCH_ESL_PORT "FreeSWITCH ESL port" "${FREESWITCH_ESL_PORT:-8021}"
   prompt_secret FREESWITCH_ESL_PASSWORD "FreeSWITCH ESL password" "${FREESWITCH_ESL_PASSWORD:-$(detect_freeswitch_password || true)}"
+  prompt_value FREESWITCH_CDR_JSON_PATH "FreeSWITCH JSON CDR folder (optional)" "${FREESWITCH_CDR_JSON_PATH:-}"
+  prompt_value FREESWITCH_VOICEMAIL_PATH "FreeSWITCH voicemail metadata folder (optional)" "${FREESWITCH_VOICEMAIL_PATH:-}"
+}
+
+configure_3cx_env() {
+  echo "Configuring 3CX API settings in $ENV_FILE"
+  deployment="$(choose_3cx_deployment)"
+  set_env_value PBXPULSE_PBX_TYPE "3cx"
+  set_env_value PBXPULSE_AGENT_MODE "3cx"
+  set_env_value THREECX_DEPLOYMENT "$deployment"
+  prompt_value PBXPULSE_DISPLAY_NAME "Display name" "3CX"
+  if [ "$deployment" = "local" ]; then
+    echo "3CX local mode: use the URL reachable from this Agent host." >&2
+  else
+    echo "3CX cloud mode: local CDR/voicemail paths are not used; API endpoints provide data." >&2
+  fi
+  prompt_value THREECX_BASE_URL "3CX base URL" "$(default_3cx_base_url "$deployment")"
+  prompt_value THREECX_CLIENT_ID "3CX API client ID" "${THREECX_CLIENT_ID:-}"
+  prompt_secret THREECX_CLIENT_SECRET "3CX API client secret" "${THREECX_CLIENT_SECRET:-}"
+  prompt_value THREECX_AUTH_PATH "3CX auth path" "${THREECX_AUTH_PATH:-/connect/token}"
+  default_3cx_test_path='/xapi/v1/Defs?$select=Id'
+  prompt_value THREECX_TEST_PATH "3CX API quick-test path" "${THREECX_TEST_PATH:-$default_3cx_test_path}"
+  prompt_value THREECX_ACTIVE_CALLS_PATH "3CX call-control state path" "${THREECX_ACTIVE_CALLS_PATH:-/callcontrol}"
+  prompt_value THREECX_USERS_PATH "3CX users path" "${THREECX_USERS_PATH:-/xapi/v1/Users}"
+  prompt_value THREECX_CALL_HISTORY_PATH "3CX call history path" "${THREECX_CALL_HISTORY_PATH:-/xapi/v1/CallHistoryView}"
+  prompt_value THREECX_VOICEMAILS_PATH "3CX voicemails path" "${THREECX_VOICEMAILS_PATH:-/xapi/v1/Voicemails}"
 }
 
 configure_mock_env() {
@@ -289,6 +371,7 @@ configure_agent_env() {
   AGENT_PORT="$(env_value PBXPULSE_AGENT_PORT)"
 
   case "$pbx_type" in
+    3cx) configure_3cx_env ;;
     freeswitch) configure_freeswitch_env ;;
     mock) configure_mock_env ;;
     *) configure_asterisk_env ;;

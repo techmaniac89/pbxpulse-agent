@@ -7,6 +7,7 @@ from .freeswitch import FreeSwitchClient
 from .mock import mock_snapshot
 from .pulse import AmiSnapshot
 from .settings import AgentSettings
+from .threecx import ThreeCxClient
 
 
 class PBXConnector(Protocol):
@@ -38,6 +39,8 @@ class MockConnector:
 def connector_for_settings(settings: AgentSettings) -> PBXConnector:
     if settings.pbx_type == "mock" or settings.mode == "mock":
         return MockConnector()
+    if settings.pbx_type == "3cx":
+        return ThreeCxClient(settings)
     if settings.pbx_type == "freeswitch":
         return FreeSwitchClient(settings)
     return AmiClient(settings)
