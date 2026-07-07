@@ -6,7 +6,7 @@ and exposes a small PBXPulse-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
-Agent; the Agent talks to Asterisk, FreeSWITCH, 3CX, or a development mock connector.
+Agent; the Agent talks to Asterisk, FreeSWITCH, or a development mock connector.
 This keeps AMI, ESL, SIP details, filesystem paths, and distro-specific quirks
 out of the user-facing PBXPulse experience.
 
@@ -36,7 +36,6 @@ The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 
 - Asterisk through AMI.
 - FreeSWITCH through Event Socket.
-- 3CX through HTTP APIs.
 - Mock connector for local development and UI testing.
 
 GUI PBX distributions are mapped to their underlying PBX engine:
@@ -532,7 +531,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXPulseAgent-0.2.3-beta-linux-source-installer.tar.gz
+  PBXPulseAgent-0.2.4-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -543,7 +542,7 @@ uninstall script. It installs under `/opt/pbxpulse-agent`, creates the systemd
 service, writes `/etc/pbxpulse-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.2.3-beta`, attach the matching files from
+For a release tag such as `agent-v0.2.4-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

@@ -38,8 +38,8 @@ The installer:
 - Runs Uvicorn on `0.0.0.0:8765` by default.
 
 The installer writes Agent settings only. It does not edit PBX server
-configuration, so AMI, ESL, or 3CX API access must still be enabled and
-permitted on the PBX side.
+configuration, so AMI or ESL access must still be enabled and permitted on the
+PBX side.
 
 After install, review the environment file for the target PBX:
 
