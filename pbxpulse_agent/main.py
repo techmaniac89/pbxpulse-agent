@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 from html import escape
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -425,19 +425,12 @@ def _valid_moment_hours(value: object) -> int:
 
 
 def _pbx_host() -> str:
-    if settings.pbx_type == "3cx":
-        return urlparse(settings.threecx_base_url).hostname or settings.threecx_base_url
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_host
     return settings.host
 
 
 def _pbx_port() -> int | str:
-    if settings.pbx_type == "3cx":
-        parsed = urlparse(settings.threecx_base_url)
-        if parsed.port:
-            return parsed.port
-        return 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else ""
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_port
     return settings.port

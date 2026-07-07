@@ -4,8 +4,8 @@ PBXPulse Agent is open source so PBX support should be easy to extend without
 changing the PBXPulse app.
 
 A connector observes one PBX family and translates it into PBXPulse concepts.
-The app should not know whether the source is Asterisk, FreeSWITCH, 3CX, CUCM,
-or something else.
+The app should not know whether the source is Asterisk, FreeSWITCH, CUCM, or
+something else.
 
 Connectors live inside this agent repository under `pbxpulse_agent/`. They are
 responsible for PBX-specific access, authentication, parsing, and diagnostics.
@@ -28,7 +28,6 @@ PBX connector
 | FreePBX, Issabel, VitalPBX | `ami.py` | Supported as Asterisk-based systems |
 | FreeSWITCH | `freeswitch.py` | Event Socket connection, active channels, optional JSON CDR/voicemail paths |
 | FusionPBX | `freeswitch.py` | Supported as a FreeSWITCH-based system |
-| 3CX | `threecx.py` | API authentication, active calls, users/extensions, call history, voicemail |
 | Mock | `mock.py` | Development/test fixture |
 
 GUI PBX distributions are handled through the PBX engine underneath them.
@@ -155,45 +154,3 @@ FREESWITCH_VOICEMAIL_PATH=/var/lib/freeswitch/storage/voicemail
 
 Those paths are disabled by default because FreeSWITCH CDR and voicemail storage
 layout depends on enabled modules and distribution packaging.
-
-## 3CX Notes
-
-The first 3CX connector uses HTTP JSON APIs with client credentials:
-
-```text
-PBXPULSE_PBX_TYPE=3cx
-THREECX_DEPLOYMENT=cloud
-THREECX_BASE_URL=https://pbx.example.com
-THREECX_CLIENT_ID=<client id>
-THREECX_CLIENT_SECRET=<client secret>
-```
-
-Default endpoint paths are:
-
-```text
-THREECX_AUTH_PATH=/connect/token
-THREECX_TEST_PATH=/xapi/v1/Defs?$select=Id
-THREECX_ACTIVE_CALLS_PATH=/callcontrol
-THREECX_USERS_PATH=/xapi/v1/Users
-THREECX_CALL_HISTORY_PATH=/xapi/v1/CallHistoryView
-THREECX_VOICEMAILS_PATH=/xapi/v1/Voicemails
-```
-
-The connector uses the 3CX Configuration API for authentication, the quick-test,
-and users, and the Call Control API for live DN/participant state. It keeps
-history and voicemail paths configurable because 3CX API surface and naming can
-vary by version, edition, and enabled API access. It maps live participants to
-PBXPulse calls, users/extensions to people, call history to answered/missed/IVR
-timeline entries, and voicemail rows to voicemail evidence. It does not read
-recordings.
-
-Official 3CX references used for these defaults:
-
-- Configuration API: https://www.3cx.com/docs/configuration-rest-api/
-- Configuration API endpoints: https://www.3cx.com/docs/configuration-rest-api-endpoints/
-- Call Control API: https://www.3cx.com/docs/call-control-api/
-- Call Control API endpoints: https://www.3cx.com/docs/call-control-api-endpoints/
-
-Cloud 3CX uses the same connector and does not use local filesystem paths.
-Local 3CX also uses HTTP APIs, but the installer defaults the base URL toward a
-local HTTPS endpoint when local 3CX files are detected.

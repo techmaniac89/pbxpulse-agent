@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from datetime import datetime, timedelta
@@ -31,14 +30,6 @@ from pbxpulse_agent.live import home_live_events
 from pbxpulse_agent.network import is_private_or_loopback_host
 from pbxpulse_agent.pulse import AmiChannel, AmiEndpoint, AmiSnapshot, build_home_payload
 from pbxpulse_agent.settings import AgentSettings, _normalize_pbx_type
-from pbxpulse_agent.threecx import (
-    ThreeCxClient,
-    _cdr_call_from_history,
-    _channel_from_call,
-    _channels_from_callcontrol,
-    _endpoints_from_users,
-    _voicemail_from_row,
-)
 
 
 class PulseMappingTest(unittest.TestCase):
@@ -47,7 +38,6 @@ class PulseMappingTest(unittest.TestCase):
         self.assertEqual(_normalize_pbx_type("issabel"), "asterisk")
         self.assertEqual(_normalize_pbx_type("vitalpbx"), "asterisk")
         self.assertEqual(_normalize_pbx_type("fusionpbx"), "freeswitch")
-        self.assertEqual(_normalize_pbx_type("three-cx"), "3cx")
 
     def test_connector_factory_can_select_freeswitch(self) -> None:
         settings = AgentSettings(
@@ -62,16 +52,6 @@ class PulseMappingTest(unittest.TestCase):
             freeswitch_password="secret",
             freeswitch_cdr_json_path="",
             freeswitch_voicemail_path="",
-            threecx_base_url="",
-            threecx_deployment="",
-            threecx_client_id="",
-            threecx_client_secret="",
-            threecx_auth_path="/connect/token",
-            threecx_test_path="/xapi/v1/Defs?$select=Id",
-            threecx_active_calls_path="/callcontrol",
-            threecx_users_path="/xapi/v1/Users",
-            threecx_call_history_path="/xapi/v1/CallHistoryView",
-            threecx_voicemails_path="/xapi/v1/Voicemails",
             display_name="FreeSWITCH",
             timeout_seconds=3,
             extension_names={},
@@ -84,187 +64,6 @@ class PulseMappingTest(unittest.TestCase):
         connector = connector_for_settings(settings)
 
         self.assertIsInstance(connector, FreeSwitchClient)
-
-    def test_connector_factory_can_select_3cx(self) -> None:
-        settings = AgentSettings(
-            mode="3cx",
-            pbx_type="3cx",
-            host="127.0.0.1",
-            port=5038,
-            username="",
-            password="",
-            freeswitch_host="127.0.0.1",
-            freeswitch_port=8021,
-            freeswitch_password="",
-            freeswitch_cdr_json_path="",
-            freeswitch_voicemail_path="",
-            threecx_base_url="https://pbx.example.com",
-            threecx_deployment="cloud",
-            threecx_client_id="client",
-            threecx_client_secret="secret",
-            threecx_auth_path="/connect/token",
-            threecx_test_path="/xapi/v1/Defs?$select=Id",
-            threecx_active_calls_path="/callcontrol",
-            threecx_users_path="/xapi/v1/Users",
-            threecx_call_history_path="/xapi/v1/CallHistoryView",
-            threecx_voicemails_path="/xapi/v1/Voicemails",
-            display_name="3CX",
-            timeout_seconds=3,
-            extension_names={},
-            cdr_csv_path="/tmp/Master.csv",
-            voicemail_path="/tmp/voicemail",
-            timezone="UTC",
-            token="",
-        )
-
-        connector = connector_for_settings(settings)
-
-        self.assertIsInstance(connector, ThreeCxClient)
-
-    def test_3cx_deployment_normalizes_from_environment(self) -> None:
-        values = {
-            "PBXPULSE_PBX_TYPE": "threecx",
-            "THREECX_DEPLOYMENT": "on-premises",
-            "THREECX_BASE_URL": "https://127.0.0.1:5001/",
-        }
-        with patch.dict(os.environ, values, clear=True):
-            settings = AgentSettings.from_env()
-
-        self.assertEqual(settings.pbx_type, "3cx")
-        self.assertEqual(settings.threecx_deployment, "local")
-        self.assertEqual(settings.threecx_base_url, "https://127.0.0.1:5001")
-
-    def test_3cx_call_row_maps_to_pbxpulse_snapshot_channel(self) -> None:
-        channel = _channel_from_call(
-            {
-                "callId": "call-1",
-                "fromNumber": "101",
-                "fromName": "Reception",
-                "toNumber": "102",
-                "toName": "Support",
-                "status": "Talking",
-                "sourceDn": "101",
-            }
-        )
-
-        self.assertEqual(channel.channel, "call-1")
-        self.assertEqual(channel.endpoint, "101")
-        self.assertEqual(channel.extension, "102")
-        self.assertEqual(channel.caller, "Reception")
-        self.assertEqual(channel.connected, "Support")
-
-    def test_3cx_callcontrol_response_maps_to_pbxpulse_snapshot_channels(self) -> None:
-        channels = _channels_from_callcontrol(
-            [
-                {
-                    "dn": "100",
-                    "type": "Extension",
-                    "participants": [
-                        {
-                            "id": 1,
-                            "status": "Connected",
-                            "dn": "100",
-                            "party_caller_name": "Maria",
-                            "party_dn": "101",
-                            "party_caller_id": "2105550000",
-                            "callid": 42,
-                            "legid": 2,
-                        }
-                    ],
-                }
-            ]
-        )
-
-        self.assertEqual(channels[0].channel, "42")
-        self.assertEqual(channels[0].endpoint, "100")
-        self.assertEqual(channels[0].extension, "101")
-        self.assertEqual(channels[0].caller, "Maria")
-        self.assertEqual(channels[0].caller_number, "2105550000")
-        self.assertEqual(channels[0].linked_id, "42")
-
-    def test_3cx_users_and_active_calls_map_to_endpoints(self) -> None:
-        channels = [
-            _channel_from_call(
-                {
-                    "callId": "call-1",
-                    "fromNumber": "101",
-                    "toNumber": "102",
-                    "status": "Talking",
-                    "sourceDn": "101",
-                }
-            )
-        ]
-
-        endpoints = _endpoints_from_users(
-            [{"number": "101", "displayName": "Reception", "status": "Available"}],
-            channels,
-        )
-
-        self.assertEqual(endpoints[0].extension, "101")
-        self.assertEqual(endpoints[0].label, "Reception")
-        self.assertEqual(endpoints[0].active_channels, 1)
-
-    def test_3cx_official_user_fields_map_to_endpoints(self) -> None:
-        endpoints = _endpoints_from_users(
-            [
-                {
-                    "FirstName": "Ada",
-                    "LastName": "Lovelace",
-                    "Number": "101",
-                    "EmailAddress": "ada@example.com",
-                }
-            ],
-            [],
-        )
-
-        self.assertEqual(endpoints[0].extension, "101")
-        self.assertEqual(endpoints[0].label, "Ada Lovelace")
-
-    def test_3cx_history_row_maps_answered_missed_and_ivr_calls(self) -> None:
-        answered = _cdr_call_from_history(
-            {
-                "fromNumber": "101",
-                "toNumber": "102",
-                "status": "Answered",
-                "startedAt": "2026-06-26T20:00:00Z",
-                "durationSeconds": "42",
-            }
-        )
-        missed = _cdr_call_from_history(
-            {
-                "fromNumber": "103",
-                "toNumber": "104",
-                "result": "Missed",
-                "startTime": "2026-06-26 20:05:00",
-            }
-        )
-        ivr = _cdr_call_from_history(
-            {
-                "fromNumber": "2105550000",
-                "type": "Digital Receptionist",
-                "ivrName": "Main IVR",
-                "date": "2026-06-26T20:10:00Z",
-            }
-        )
-
-        self.assertEqual(answered.disposition, "ANSWERED")
-        self.assertEqual(answered.duration_seconds, 42)
-        self.assertEqual(missed.disposition, "NO ANSWER")
-        self.assertEqual(ivr.context, "Digital Receptionist")
-        self.assertEqual(ivr.last_data, "Main IVR")
-
-    def test_3cx_voicemail_row_maps_to_voicemail_message(self) -> None:
-        message = _voicemail_from_row(
-            {
-                "extension": "120",
-                "callerName": "Maria",
-                "createdAt": "2026-06-26T20:00:00Z",
-            }
-        )
-
-        self.assertEqual(message.mailbox, "120")
-        self.assertEqual(message.caller, "Maria")
-        self.assertIsNotNone(message.created_at)
 
     def test_freeswitch_json_cdr_and_voicemail_paths_are_optional_history_sources(self) -> None:
         with TemporaryDirectory() as directory:

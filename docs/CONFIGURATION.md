@@ -13,8 +13,8 @@ Use `.env.example` as the starting point.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PBXPULSE_PBX_TYPE` | `asterisk` | PBX family. Supports `asterisk`, `freeswitch`, `3cx`, `mock`, and aliases listed below. |
-| `PBXPULSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, `3cx`, or `mock`. |
+| `PBXPULSE_PBX_TYPE` | `asterisk` | PBX family. Supports `asterisk`, `freeswitch`, `mock`, and aliases listed below. |
+| `PBXPULSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, or `mock`. |
 | `PBXPULSE_DISPLAY_NAME` | connector name | Friendly PBX name shown by the Agent. |
 | `PBXPULSE_TIMEZONE` | `TZ` or empty | IANA timezone for history and timestamps. |
 | `PBXPULSE_AGENT_TOKEN` | empty | Optional shared token for pairing and remote access. |
@@ -30,7 +30,6 @@ Use `.env.example` as the starting point.
 | `freepbx`, `issabel`, `vitalpbx` | `asterisk` |
 | `fs`, `freeswitch` | `freeswitch` |
 | `fusionpbx` | `freeswitch` |
-| `3cx`, `threecx` | `3cx` |
 | `mock` | `mock` |
 
 ## Asterisk AMI Settings
@@ -63,29 +62,6 @@ ASTERISK_SPOOL_HOST_PATH=../asterisk/spool
 | `FREESWITCH_ESL_PASSWORD` | empty | Event Socket password. |
 | `FREESWITCH_CDR_JSON_PATH` | empty | Optional local `mod_json_cdr` folder visible to the Agent. |
 | `FREESWITCH_VOICEMAIL_PATH` | empty | Optional local FreeSWITCH voicemail metadata folder visible to the Agent. |
-
-## 3CX API Settings
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `THREECX_DEPLOYMENT` | empty | `local` or `cloud`; used by the installer and diagnostics. |
-| `THREECX_BASE_URL` | empty | 3CX HTTPS origin, such as `https://pbx.example.com`. |
-| `THREECX_CLIENT_ID` | empty | 3CX API client ID. |
-| `THREECX_CLIENT_SECRET` | empty | 3CX API client secret. |
-| `THREECX_AUTH_PATH` | `/connect/token` | Token endpoint path. |
-| `THREECX_TEST_PATH` | `/xapi/v1/Defs?$select=Id` | Configuration API quick-test path used by diagnostics. |
-| `THREECX_ACTIVE_CALLS_PATH` | `/callcontrol` | Call Control state path for live DN/participant data. |
-| `THREECX_USERS_PATH` | `/xapi/v1/Users` | Users/extensions endpoint path. |
-| `THREECX_CALL_HISTORY_PATH` | `/xapi/v1/CallHistoryView` | Call history endpoint path. |
-| `THREECX_VOICEMAILS_PATH` | `/xapi/v1/Voicemails` | Voicemail endpoint path. |
-
-The 3CX connector always uses HTTP JSON APIs, including cloud deployments. In
-`local` mode, the base URL should be the URL reachable from the Agent host, often
-the local 3CX HTTPS endpoint. In `cloud` mode, no local CDR or voicemail paths
-are used; the Agent reads active calls, users, history, IVR/menu rows, and
-voicemail through API endpoints when the API client has permission. Endpoint
-path overrides exist because 3CX API availability and naming can vary by
-version and license.
 
 ## Token Handling
 
