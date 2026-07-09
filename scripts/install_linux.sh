@@ -1,11 +1,11 @@
 #!/bin/sh
 set -e
 
-SERVICE_USER="pbxpulse"
-SERVICE_NAME="pbxpulse-agent"
-INSTALL_DIR="/opt/pbxpulse-agent"
-ENV_FILE="/etc/pbxpulse-agent.env"
-AGENT_PORT="${PBXPULSE_AGENT_PORT:-8765}"
+SERVICE_USER="pbxsense"
+SERVICE_NAME="pbxsense-agent"
+INSTALL_DIR="/opt/pbxsense-agent"
+ENV_FILE="/etc/pbxsense-agent.env"
+AGENT_PORT="${PBXSENSE_AGENT_PORT:-8765}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run this installer with sudo or as root."
@@ -66,6 +66,7 @@ normalize_pbx_type() {
   case "$normalized" in
     ami|asteriskami|asterisk|freepbx|issabel|vitalpbx) printf '%s\n' "asterisk" ;;
     fs|freeswitch|fusionpbx) printf '%s\n' "freeswitch" ;;
+    yeastar|yeastarpseries|pseries) printf '%s\n' "yeastar" ;;
     mock) printf '%s\n' "mock" ;;
     *) printf '%s\n' "$1" ;;
   esac
@@ -133,7 +134,7 @@ first_existing_path() {
 }
 
 detect_timezone() {
-  current="$(env_value PBXPULSE_TIMEZONE)"
+  current="$(env_value PBXSENSE_TIMEZONE)"
   if [ -n "$current" ]; then
     printf '%s\n' "$current"
     return
@@ -196,14 +197,14 @@ detect_freeswitch_password() {
 }
 
 choose_pbx_type() {
-  if [ -n "${PBXPULSE_PBX_TYPE:-}" ]; then
-    normalize_pbx_type "$PBXPULSE_PBX_TYPE"
+  if [ -n "${PBXSENSE_PBX_TYPE:-}" ]; then
+    normalize_pbx_type "$PBXSENSE_PBX_TYPE"
     return
   fi
 
   requested=""
   if [ "$ENV_CREATED" -eq 0 ]; then
-    requested="$(env_value PBXPULSE_PBX_TYPE)"
+    requested="$(env_value PBXSENSE_PBX_TYPE)"
   fi
   if [ -n "$requested" ]; then
     normalize_pbx_type "$requested"
@@ -227,7 +228,7 @@ choose_pbx_type() {
     [ "$has_asterisk" -eq 1 ] && echo "  - Asterisk files or commands found." >&2
     [ "$has_freeswitch" -eq 1 ] && echo "  - FreeSWITCH files or commands found." >&2
     [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && echo "  - No local PBX files found; using Asterisk defaults." >&2
-    printf "PBX type: asterisk, freeswitch, or mock [%s]: " "$detected" >&2
+    printf "PBX type: asterisk, freeswitch, yeastar, or mock [%s]: " "$detected" >&2
     read -r answer
     if [ -n "$answer" ]; then
       detected="$answer"
@@ -239,16 +240,16 @@ choose_pbx_type() {
 
 configure_asterisk_env() {
   echo "Configuring Asterisk AMI settings in $ENV_FILE"
-  set_env_value PBXPULSE_PBX_TYPE "asterisk"
-  set_env_value PBXPULSE_AGENT_MODE "ami"
-  prompt_value PBXPULSE_DISPLAY_NAME "Display name" "Asterisk"
+  set_env_value PBXSENSE_PBX_TYPE "asterisk"
+  set_env_value PBXSENSE_AGENT_MODE "ami"
+  prompt_value PBXSENSE_DISPLAY_NAME "Display name" "Asterisk"
   prompt_value ASTERISK_AMI_HOST "Asterisk AMI host" "${ASTERISK_AMI_HOST:-127.0.0.1}"
   prompt_value ASTERISK_AMI_PORT "Asterisk AMI port" "${ASTERISK_AMI_PORT:-5038}"
 
   detected_creds="$(detect_ami_credentials || true)"
   detected_user="$(printf '%s' "$detected_creds" | awk -F'|' '{print $1}')"
   detected_secret="$(printf '%s' "$detected_creds" | awk -F'|' '{print $2}')"
-  [ -n "$detected_user" ] || detected_user="${ASTERISK_AMI_USERNAME:-pbxpulse}"
+  [ -n "$detected_user" ] || detected_user="${ASTERISK_AMI_USERNAME:-pbxsense}"
   prompt_value ASTERISK_AMI_USERNAME "Asterisk AMI username" "$detected_user"
   prompt_secret ASTERISK_AMI_PASSWORD "Asterisk AMI password" "${ASTERISK_AMI_PASSWORD:-$detected_secret}"
   prompt_value ASTERISK_AMI_TIMEOUT "Asterisk AMI timeout seconds" "${ASTERISK_AMI_TIMEOUT:-3}"
@@ -262,36 +263,52 @@ configure_asterisk_env() {
     /var/lib/asterisk/voicemail)"
   prompt_value ASTERISK_CDR_CSV_PATH "Asterisk CDR CSV path" "$cdr_path"
   prompt_value ASTERISK_VOICEMAIL_PATH "Asterisk voicemail path" "$voicemail_path"
+  recordings_path="$(first_existing_path /var/spool/asterisk/monitor /var/lib/asterisk/monitor)"
+  prompt_value ASTERISK_RECORDINGS_PATH "Asterisk recordings path" "$recordings_path"
 }
 
 configure_freeswitch_env() {
   echo "Configuring FreeSWITCH Event Socket settings in $ENV_FILE"
-  set_env_value PBXPULSE_PBX_TYPE "freeswitch"
-  set_env_value PBXPULSE_AGENT_MODE "freeswitch"
-  prompt_value PBXPULSE_DISPLAY_NAME "Display name" "FreeSWITCH"
+  set_env_value PBXSENSE_PBX_TYPE "freeswitch"
+  set_env_value PBXSENSE_AGENT_MODE "freeswitch"
+  prompt_value PBXSENSE_DISPLAY_NAME "Display name" "FreeSWITCH"
   prompt_value FREESWITCH_ESL_HOST "FreeSWITCH ESL host" "${FREESWITCH_ESL_HOST:-127.0.0.1}"
   prompt_value FREESWITCH_ESL_PORT "FreeSWITCH ESL port" "${FREESWITCH_ESL_PORT:-8021}"
   prompt_secret FREESWITCH_ESL_PASSWORD "FreeSWITCH ESL password" "${FREESWITCH_ESL_PASSWORD:-$(detect_freeswitch_password || true)}"
   prompt_value FREESWITCH_CDR_JSON_PATH "FreeSWITCH JSON CDR folder (optional)" "${FREESWITCH_CDR_JSON_PATH:-}"
   prompt_value FREESWITCH_VOICEMAIL_PATH "FreeSWITCH voicemail metadata folder (optional)" "${FREESWITCH_VOICEMAIL_PATH:-}"
+  prompt_value FREESWITCH_RECORDINGS_PATH "FreeSWITCH recordings folder (optional)" "${FREESWITCH_RECORDINGS_PATH:-}"
+}
+
+configure_yeastar_env() {
+  echo "Configuring Yeastar P-Series API settings in $ENV_FILE"
+  set_env_value PBXSENSE_PBX_TYPE "yeastar"
+  set_env_value PBXSENSE_AGENT_MODE "yeastar"
+  prompt_value PBXSENSE_DISPLAY_NAME "Display name" "Yeastar P-Series"
+  prompt_value YEASTAR_BASE_URL "Yeastar PBX base URL" "${YEASTAR_BASE_URL:-https://pbx.example.com}"
+  prompt_value YEASTAR_CLIENT_ID "Yeastar API Client ID" "${YEASTAR_CLIENT_ID:-}"
+  prompt_secret YEASTAR_CLIENT_SECRET "Yeastar API Client Secret" "${YEASTAR_CLIENT_SECRET:-}"
+  prompt_value YEASTAR_API_VERSION "Yeastar API version" "${YEASTAR_API_VERSION:-v1.0}"
+  prompt_value YEASTAR_VERIFY_TLS "Verify Yeastar TLS certificate (true/false)" "${YEASTAR_VERIFY_TLS:-true}"
 }
 
 configure_mock_env() {
   echo "Configuring mock connector settings in $ENV_FILE"
-  set_env_value PBXPULSE_PBX_TYPE "mock"
-  set_env_value PBXPULSE_AGENT_MODE "mock"
-  prompt_value PBXPULSE_DISPLAY_NAME "Display name" "Mock PBX"
+  set_env_value PBXSENSE_PBX_TYPE "mock"
+  set_env_value PBXSENSE_AGENT_MODE "mock"
+  prompt_value PBXSENSE_DISPLAY_NAME "Display name" "Mock PBX"
 }
 
 configure_agent_env() {
   pbx_type="$(choose_pbx_type)"
-  prompt_value PBXPULSE_TIMEZONE "Agent timezone" "$(detect_timezone)"
-  prompt_value PBXPULSE_CONNECT_TIMEOUT "Connector timeout seconds" "${PBXPULSE_CONNECT_TIMEOUT:-3}"
-  prompt_value PBXPULSE_AGENT_PORT "Agent HTTP port" "$AGENT_PORT"
-  AGENT_PORT="$(env_value PBXPULSE_AGENT_PORT)"
+  prompt_value PBXSENSE_TIMEZONE "Agent timezone" "$(detect_timezone)"
+  prompt_value PBXSENSE_CONNECT_TIMEOUT "Connector timeout seconds" "${PBXSENSE_CONNECT_TIMEOUT:-3}"
+  prompt_value PBXSENSE_AGENT_PORT "Agent HTTP port" "$AGENT_PORT"
+  AGENT_PORT="$(env_value PBXSENSE_AGENT_PORT)"
 
   case "$pbx_type" in
     freeswitch) configure_freeswitch_env ;;
+    yeastar) configure_yeastar_env ;;
     mock) configure_mock_env ;;
     *) configure_asterisk_env ;;
   esac
@@ -303,17 +320,17 @@ if command -v apt-get >/dev/null 2>&1; then
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to install PBXPulse Agent."
+  echo "python3 is required to install PBXSense Agent."
   exit 1
 fi
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  useradd --system --home-dir /var/lib/pbxpulse-agent --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+  useradd --system --home-dir /var/lib/pbxsense-agent --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-mkdir -p "$INSTALL_DIR" /var/lib/pbxpulse-agent /var/log/pbxpulse-agent
+mkdir -p "$INSTALL_DIR" /var/lib/pbxsense-agent /var/log/pbxsense-agent
 
-for entry in pbxpulse_agent scripts docs requirements.txt .env.example README.md SECURITY.md Dockerfile docker-compose.yml docker-compose.lan.yml docker-compose.parent-example.yml; do
+for entry in pbxsense_agent scripts docs requirements.txt .env.example CODEX.md README.md SECURITY.md Dockerfile docker-compose.yml docker-compose.lan.yml docker-compose.parent-example.yml; do
   if [ -e "$SOURCE_DIR/$entry" ]; then
     rm -rf "$INSTALL_DIR/$entry"
     cp -R "$SOURCE_DIR/$entry" "$INSTALL_DIR/$entry"
@@ -335,14 +352,14 @@ python3 -m venv "$INSTALL_DIR/.venv"
 "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$INSTALL_DIR/.venv/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
 
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" /var/lib/pbxpulse-agent /var/log/pbxpulse-agent
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" /var/lib/pbxsense-agent /var/log/pbxsense-agent
 chmod 600 "$ENV_FILE"
 chown root:root "$ENV_FILE"
 
 if command -v systemctl >/dev/null 2>&1; then
   cat >"/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=PBXPulse Agent
+Description=PBXSense Agent
 Wants=network-online.target
 After=network-online.target
 
@@ -351,9 +368,9 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-Environment=PBXPULSE_AGENT_PORT=$AGENT_PORT
+Environment=PBXSENSE_AGENT_PORT=$AGENT_PORT
 EnvironmentFile=$ENV_FILE
-ExecStart=$INSTALL_DIR/.venv/bin/uvicorn pbxpulse_agent.main:app --host 0.0.0.0 --port \${PBXPULSE_AGENT_PORT}
+ExecStart=$INSTALL_DIR/.venv/bin/uvicorn pbxsense_agent.main:app --host 0.0.0.0 --port \${PBXSENSE_AGENT_PORT}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -368,6 +385,6 @@ EOF
   systemctl restart "$SERVICE_NAME.service"
 fi
 
-echo "PBXPulse Agent installed."
+echo "PBXSense Agent installed."
 echo "Environment: $ENV_FILE"
 echo "Service: sudo systemctl status $SERVICE_NAME"

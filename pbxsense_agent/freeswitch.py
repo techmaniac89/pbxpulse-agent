@@ -261,6 +261,14 @@ def _read_json_cdr_calls(path: str, *, limit: int = 1000) -> list[CdrCall]:
                 destination_channel=_string(row, "bridge_uuid", "bleg_uuid"),
                 last_app=_string(row, "last_app", "application"),
                 last_data=_string(row, "last_arg", "application_data"),
+                recording_id=_recording_filename(
+                    _string(
+                        row,
+                        "recording_file",
+                        "record_file",
+                        "record_path",
+                    )
+                ),
             )
         )
 
@@ -407,3 +415,7 @@ def _string(row: dict[str, Any], *keys: str) -> str:
         if value is not None and str(value).strip():
             return str(value).strip()
     return ""
+
+
+def _recording_filename(value: str) -> str:
+    return value.replace("\\", "/").rsplit("/", 1)[-1]

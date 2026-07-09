@@ -1,20 +1,20 @@
 #!/bin/sh
 set -e
 
-SERVICE_USER="pbxpulse"
-SERVICE_NAME="pbxpulse-agent"
-INSTALL_DIR="/opt/pbxpulse-agent"
-ENV_FILE="/etc/pbxpulse-agent.env"
+SERVICE_USER="pbxsense"
+SERVICE_NAME="pbxsense-agent"
+INSTALL_DIR="/opt/pbxsense-agent"
+ENV_FILE="/etc/pbxsense-agent.env"
 SYSTEMD_UNIT="/etc/systemd/system/$SERVICE_NAME.service"
-DATA_DIR="/var/lib/pbxpulse-agent"
-LOG_DIR="/var/log/pbxpulse-agent"
+DATA_DIR="/var/lib/pbxsense-agent"
+LOG_DIR="/var/log/pbxsense-agent"
 PURGE=0
 
 usage() {
   cat <<EOF
 Usage: sudo sh ./scripts/uninstall_linux.sh [--purge]
 
-Removes the PBXPulse Agent service and installed application files.
+Removes the PBXSense Agent service and installed application files.
 
 Options:
   --purge   Also remove $DATA_DIR, $LOG_DIR, and the $SERVICE_USER user.
@@ -66,7 +66,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 if [ "$PURGE" -eq 1 ]; then
-  echo "Purging PBXPulse Agent local state..."
+  echo "Purging PBXSense Agent local state..."
   rm -rf "$DATA_DIR" "$LOG_DIR"
 
   if id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -82,4 +82,4 @@ else
   echo "Run with --purge to remove preserved data, logs, and user."
 fi
 
-echo "PBXPulse Agent uninstalled."
+echo "PBXSense Agent uninstalled."

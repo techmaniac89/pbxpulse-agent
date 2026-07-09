@@ -1,2 +1,0 @@
-"""PBXPulse Agent package."""
-

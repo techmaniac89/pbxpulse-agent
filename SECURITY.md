@@ -1,6 +1,6 @@
-# PBXPulse Agent Security
+# PBXSense Agent Security
 
-PBXPulse Agent is designed to run near the PBX on a trusted host, LAN, or VPN.
+PBXSense Agent is designed to run near the PBX on a trusted host, LAN, or VPN.
 Do not expose PBX management protocols or the Agent directly to the public
 internet.
 
@@ -16,7 +16,7 @@ internet.
 
 ## Agent Token
 
-Set `PBXPULSE_AGENT_TOKEN` for production and LAN deployments.
+Set `PBXSENSE_AGENT_TOKEN` for production and LAN deployments.
 
 When a token is set, requests from localhost, private LAN, or VPN client IPs are
 trusted for Agent HTTP pages, JSON endpoints, and `/live`; browser HTML pages
@@ -31,23 +31,23 @@ python3 scripts/ensure_token.py .env
 For Linux service installs, the token is stored in:
 
 ```text
-/etc/pbxpulse-agent.env
+/etc/pbxsense-agent.env
 ```
 
 Keep this file readable only by root:
 
 ```bash
-sudo chmod 600 /etc/pbxpulse-agent.env
-sudo chown root:root /etc/pbxpulse-agent.env
+sudo chmod 600 /etc/pbxsense-agent.env
+sudo chown root:root /etc/pbxsense-agent.env
 ```
 
 Rotate the token if it is shared accidentally. After rotation, reconnect the
-PBXPulse app with the new pairing URL or QR payload.
+PBXSense app with the new pairing URL or QR payload.
 
 ## Linux Service Hardening
 
-The installer creates a dedicated `pbxpulse` service user and runs the Agent
-from `/opt/pbxpulse-agent`.
+The installer creates a dedicated `pbxsense` service user and runs the Agent
+from `/opt/pbxsense-agent`.
 
 The systemd unit uses:
 
@@ -62,16 +62,16 @@ paths.
 
 ## PBX Credentials
 
-- Use a dedicated AMI or ESL user/password for PBXPulse.
+- Use a dedicated AMI or ESL user/password for PBXSense.
 - Grant read-only AMI permissions when possible.
 - Do not reuse admin web UI credentials.
-- Do not commit `.env`, `/etc/pbxpulse-agent.env`, generated tokens, or PBX
+- Do not commit `.env`, `/etc/pbxsense-agent.env`, generated tokens, or PBX
   passwords.
 
 Minimal Asterisk AMI shape:
 
 ```ini
-[pbxpulse]
+[pbxsense]
 secret = <strong-secret>
 read = system,call,reporting,command
 write =

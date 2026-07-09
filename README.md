@@ -1,23 +1,23 @@
-# PBXPulse Agent
+# PBXSense Agent
 
-PBXPulse Agent is the local bridge between a phone system and the PBXPulse app.
+PBXSense Agent is the local bridge between a phone system and the PBXSense app.
 It runs near the PBX, observes PBX state through the safest available connector,
-and exposes a small PBXPulse-shaped API that the app can consume without knowing
+and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
-Agent; the Agent talks to Asterisk, FreeSWITCH, or a development mock connector.
+Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, or a development mock connector.
 This keeps AMI, ESL, SIP details, filesystem paths, and distro-specific quirks
-out of the user-facing PBXPulse experience.
+out of the user-facing PBXSense experience.
 
 ## What It Does
 
 - Reads current PBX state from a supported connector.
-- Converts raw PBX observations into PBXPulse Home data, Signals, Tips, and
+- Converts raw PBX observations into PBXSense Home data, Signals, Tips, and
   technical details.
 - Streams live Home snapshots so the app can refresh without polling the PBX
   directly.
-- Serves pairing pages and QR payloads for connecting PBXPulse to the local
+- Serves pairing pages and QR payloads for connecting PBXSense to the local
   Agent.
 - Provides diagnostics for connector setup, especially Asterisk AMI.
 - Supports production service installs, Docker Compose installs, and local
@@ -29,6 +29,7 @@ The app should only talk to these Agent surfaces:
 - `WS /live`
 - `GET /pair`
 - `GET /diagnostics` and connector-specific diagnostics when troubleshooting
+- `GET /recordings/{recording-id}` for a recording attached to a returned call
 
 The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 
@@ -36,6 +37,7 @@ The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 
 - Asterisk through AMI.
 - FreeSWITCH through Event Socket.
+- Yeastar P-Series through its OAuth-protected OpenAPI.
 - Mock connector for local development and UI testing.
 
 GUI PBX distributions are mapped to their underlying PBX engine:
@@ -46,8 +48,8 @@ GUI PBX distributions are mapped to their underlying PBX engine:
 ## Usage Overview
 
 Most deployments should use the Linux service installer. It installs the Agent
-under `/opt/pbxpulse-agent`, creates a systemd service, prepares
-`/etc/pbxpulse-agent.env`, auto-detects the likely PBX connector, prompts for
+under `/opt/pbxsense-agent`, creates a systemd service, prepares
+`/etc/pbxsense-agent.env`, auto-detects the likely PBX connector, prompts for
 connector settings, and generates a local pairing token when one is not already
 configured.
 
@@ -69,7 +71,7 @@ For local development, use mock mode:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-PBXPULSE_AGENT_MODE=mock uvicorn pbxpulse_agent.main:app --host 0.0.0.0 --port 8765 --reload
+PBXSENSE_AGENT_MODE=mock uvicorn pbxsense_agent.main:app --host 0.0.0.0 --port 8765 --reload
 ```
 
 After the Agent is running, open:
@@ -84,12 +86,12 @@ For pairing, open:
 http://127.0.0.1:8765/pair
 ```
 
-If `PBXPULSE_AGENT_TOKEN` is configured, LAN browser visits can open the Agent
-page directly. The pairing page still embeds the token in the `pbxpulse://`
+If `PBXSENSE_AGENT_TOKEN` is configured, LAN browser visits can open the Agent
+page directly. The pairing page still embeds the token in the `pbxsense://`
 payload for the app:
 
 ```text
-http://<agent-host>:8765/pair?token=<PBXPULSE_AGENT_TOKEN>
+http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
 ```
 
 ## Configuration
@@ -97,27 +99,30 @@ http://<agent-host>:8765/pair?token=<PBXPULSE_AGENT_TOKEN>
 The Agent is configured through environment variables. The most important ones
 are:
 
-- `PBXPULSE_PBX_TYPE`: `asterisk`, `freeswitch`, or `mock`.
-- `PBXPULSE_AGENT_MODE`: connector mode; normally `ami`, `freeswitch`, or `mock`.
-- `PBXPULSE_DISPLAY_NAME`: friendly name shown by the Agent.
-- `PBXPULSE_TIMEZONE`: IANA timezone used for timestamps and history.
-- `PBXPULSE_AGENT_TOKEN`: optional shared token for pairing and remote access.
+- `PBXSENSE_PBX_TYPE`: `asterisk`, `freeswitch`, `yeastar`, or `mock`.
+- `PBXSENSE_AGENT_MODE`: connector mode; normally `ami`, `freeswitch`, `yeastar`, or `mock`.
+- `PBXSENSE_DISPLAY_NAME`: friendly name shown by the Agent.
+- `PBXSENSE_TIMEZONE`: IANA timezone used for timestamps and history.
+- `PBXSENSE_AGENT_TOKEN`: optional shared token for pairing and remote access.
 - `ASTERISK_AMI_*`: Asterisk AMI host, port, username, password, and timeout.
 - `FREESWITCH_ESL_*`: FreeSWITCH Event Socket host, port, and password.
 - `ASTERISK_CDR_CSV_PATH`: Asterisk CDR CSV path for call history.
 - `ASTERISK_VOICEMAIL_PATH`: Asterisk voicemail spool path.
+- `ASTERISK_RECORDINGS_PATH`: Asterisk MixMonitor recording root.
+- `FREESWITCH_RECORDINGS_PATH`: optional FreeSWITCH recording root.
+- `YEASTAR_*`: P-Series API base URL and client credentials.
 
 Use `.env.example` as the starting point for Docker and development installs.
 Linux service installs write the final environment file to:
 
 ```text
-/etc/pbxpulse-agent.env
+/etc/pbxsense-agent.env
 ```
 
 ## Repository Layout
 
-- `pbxpulse_agent/`: FastAPI app, connector adapters, live stream, settings, and
-  PBXPulse signal generation.
+- `pbxsense_agent/`: FastAPI app, connector adapters, live stream, settings, and
+  PBXSense signal generation.
 - `scripts/`: installer and helper scripts.
 - `packaging/`: package metadata and release packaging support.
 - `tests/`: automated tests for Agent behavior.
@@ -143,7 +148,7 @@ environment file.
 On the PBX host, or on a small Linux machine that can reach the PBX connector:
 
 ```bash
-cd pbxpulse-agent
+cd pbxsense-agent
 sudo sh ./scripts/install_linux.sh
 ```
 
@@ -155,32 +160,32 @@ The installer:
 
 - Installs Python runtime packages when `apt-get` is available.
 - Auto-detects local Asterisk or FreeSWITCH files and commands when possible.
-- Lets you confirm `asterisk`, `freeswitch`, or `mock` mode interactively.
+- Lets you confirm `asterisk`, `freeswitch`, `yeastar`, or `mock` mode interactively.
 - Prompts for timezone, Agent port, and connector timeout.
-- Prompts for AMI or ESL credentials and preserves existing values on reinstall.
-- Suggests Asterisk CDR CSV and voicemail paths from common local locations.
+- Prompts for AMI, ESL, or Yeastar API credentials and preserves existing values on reinstall.
+- Suggests Asterisk CDR CSV, voicemail, and recording paths from common local locations.
 - Reuses a readable Asterisk `manager.conf` user secret or FreeSWITCH Event
   Socket password as a default when it can find one.
-- Creates `/opt/pbxpulse-agent`.
-- Creates a private `pbxpulse` service user.
-- Creates `/etc/pbxpulse-agent.env`.
+- Creates `/opt/pbxsense-agent`.
+- Creates a private `pbxsense` service user.
+- Creates `/etc/pbxsense-agent.env`.
 - Generates a local pairing token when one is not provided.
 - Creates a Python virtual environment and installs `requirements.txt`.
 - Copies the Agent code, scripts, docs, compose examples, and support files.
-- Creates and starts `pbxpulse-agent.service`.
+- Creates and starts `pbxsense-agent.service`.
 
 The installer writes Agent settings only. It does not edit PBX server
-configuration, so AMI or ESL access must still be enabled and permitted on the
+configuration, so AMI, ESL, or Yeastar API access must still be enabled and permitted on the
 PBX side.
 
-After install, review `/etc/pbxpulse-agent.env`. If you change connector
+After install, review `/etc/pbxsense-agent.env`. If you change connector
 credentials, timezone, or file paths, restart the service.
 
 After install, useful commands are:
 
 ```bash
-systemctl status pbxpulse-agent
-journalctl -u pbxpulse-agent -f
+systemctl status pbxsense-agent
+journalctl -u pbxsense-agent -f
 ```
 
 To uninstall the Linux service and installed app files:
@@ -189,9 +194,9 @@ To uninstall the Linux service and installed app files:
 sudo sh ./scripts/uninstall_linux.sh
 ```
 
-This also removes `/etc/pbxpulse-agent.env`, so the installer does not reuse
+This also removes `/etc/pbxsense-agent.env`, so the installer does not reuse
 saved choices on the next install. Use `--purge` to also remove local data,
-logs, and the `pbxpulse` service user.
+logs, and the `pbxsense` service user.
 
 Open the Agent page:
 
@@ -202,10 +207,10 @@ http://<agent-host>:8765/
 To pair the app, open:
 
 ```text
-http://<agent-host>:8765/pair?token=<PBXPULSE_AGENT_TOKEN>
+http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
 ```
 
-The token lives in `/etc/pbxpulse-agent.env`.
+The token lives in `/etc/pbxsense-agent.env`.
 
 ### Installer Defaults
 
@@ -213,7 +218,7 @@ Set the PBX type before install if you want to skip auto-detection and force a
 connector mode:
 
 ```bash
-sudo PBXPULSE_PBX_TYPE=freeswitch sh ./scripts/install_linux.sh
+sudo PBXSENSE_PBX_TYPE=freeswitch sh ./scripts/install_linux.sh
 ```
 
 Supported values today:
@@ -238,9 +243,9 @@ bindaddr = 0.0.0.0
 ```
 
 In practice this means a fresh Asterisk system usually needs AMI enabled and a
-manager user created before PBXPulse can read live PBX state. The official
+manager user created before PBXSense can read live PBX state. The official
 sample also shows `deny`/`permit` on the manager user, not only under
-`[general]`. `permit` must match the host running the PBXPulse Agent. If the
+`[general]`. `permit` must match the host running the PBXSense Agent. If the
 Agent runs on the PBX itself, localhost is enough:
 
 ```ini
@@ -261,16 +266,16 @@ permit only when the Agent IP can move or the deployment is managed inside a
 trusted private LAN/VPN. Never expose AMI to the internet.
 
 The installer does not edit Asterisk configuration. Prepare AMI in Asterisk,
-then put the connection values in `/etc/pbxpulse-agent.env`.
+then put the connection values in `/etc/pbxsense-agent.env`.
 
 Do not expose AMI to the internet. A typical Agent environment looks like:
 
 ```text
-PBXPULSE_AGENT_MODE=ami
-PBXPULSE_DISPLAY_NAME=Asterisk
+PBXSENSE_AGENT_MODE=ami
+PBXSENSE_DISPLAY_NAME=Asterisk
 ASTERISK_AMI_HOST=127.0.0.1
 ASTERISK_AMI_PORT=5038
-ASTERISK_AMI_USERNAME=pbxpulse
+ASTERISK_AMI_USERNAME=pbxsense
 ASTERISK_AMI_PASSWORD=<secret>
 ASTERISK_CDR_CSV_PATH=/var/log/asterisk/cdr-csv/Master.csv
 ASTERISK_VOICEMAIL_PATH=/var/spool/asterisk/voicemail
@@ -282,7 +287,7 @@ Create or verify an AMI section like this in Asterisk:
 [general]
 enabled = yes
 
-[pbxpulse]
+[pbxsense]
 secret = <secret>
 read = system,call,reporting,command
 write =
@@ -290,7 +295,7 @@ permit = 127.0.0.1/255.255.255.255
 ```
 
 If the Agent runs from another LAN host, set the AMI host in
-`/etc/pbxpulse-agent.env`:
+`/etc/pbxsense-agent.env`:
 
 ```text
 ASTERISK_AMI_HOST=192.168.x.x
@@ -303,7 +308,7 @@ Then configure Asterisk `permit` for that Agent host or trusted LAN/VPN range.
 For FreeSWITCH, configure the Agent to use Event Socket:
 
 ```text
-PBXPULSE_PBX_TYPE=freeswitch
+PBXSENSE_PBX_TYPE=freeswitch
 FREESWITCH_ESL_HOST=127.0.0.1
 FREESWITCH_ESL_PORT=8021
 FREESWITCH_ESL_PASSWORD=<event_socket password>
@@ -312,7 +317,7 @@ FREESWITCH_VOICEMAIL_PATH=
 ```
 
 Read the password from your FreeSWITCH configuration and place it in
-`/etc/pbxpulse-agent.env`. The standard location is:
+`/etc/pbxsense-agent.env`. The standard location is:
 
 ```text
 /etc/freeswitch/autoload_configs/event_socket.conf.xml
@@ -324,10 +329,10 @@ those FreeSWITCH modules/files are available.
 
 ### GUI PBX Distributions
 
-PBXPulse connects to the PBX engine, not to the web GUI. FreePBX, Issabel, and
+PBXSense connects to the PBX engine, not to the web GUI. FreePBX, Issabel, and
 VitalPBX are treated as Asterisk systems and use the AMI connector. FusionPBX is
 treated as a FreeSWITCH system and uses Event Socket. Set
-`PBXPULSE_PBX_TYPE=asterisk` or `PBXPULSE_PBX_TYPE=freeswitch`; the aliases
+`PBXSENSE_PBX_TYPE=asterisk` or `PBXSENSE_PBX_TYPE=freeswitch`; the aliases
 `freepbx`, `issabel`, `vitalpbx`, and `fusionpbx` are accepted too.
 
 The main thing that can differ between GUI distributions is filesystem layout:
@@ -337,12 +342,12 @@ asks AMI for classic `chan_sip` peers when available, which helps older
 FreePBX-style systems. If history or voicemail is missing, check `/diagnostics`
 and adjust `ASTERISK_CDR_CSV_PATH` or `ASTERISK_VOICEMAIL_PATH`.
 
-`PBXPULSE_EXTENSION_NAMES` is optional. PBXPulse first tries to use endpoint
+`PBXSENSE_EXTENSION_NAMES` is optional. PBXSense first tries to use endpoint
 labels from AMI. Keep the mapping only if your PBX exposes numbers without
 friendly names, or if you want to rename them for the app.
 
 If your Asterisk writes CDR to another location, change
-`ASTERISK_CDR_CSV_PATH` in `/etc/pbxpulse-agent.env`.
+`ASTERISK_CDR_CSV_PATH` in `/etc/pbxsense-agent.env`.
 
 ## Docker Compose Option
 
@@ -366,10 +371,10 @@ Keep the Agent timezone aligned with the PBX:
 
 ```text
 TZ=Your/Timezone
-PBXPULSE_TIMEZONE=Your/Timezone
+PBXSENSE_TIMEZONE=Your/Timezone
 ```
 
-`PBXPULSE_TIMEZONE` is optional. If it is empty, PBXPulse uses `TZ` or the
+`PBXSENSE_TIMEZONE` is optional. If it is empty, PBXSense uses `TZ` or the
 container's local time. Use an IANA name such as `Europe/Athens`,
 `Europe/London`, or `America/New_York`.
 
@@ -380,10 +385,10 @@ directly.
 Optionally protect the Agent with a shared local token:
 
 ```text
-PBXPULSE_AGENT_TOKEN=choose-a-long-random-value
+PBXSENSE_AGENT_TOKEN=choose-a-long-random-value
 ```
 
-When this is set, PBXPulse must be connected with the same token. Leave it empty
+When this is set, PBXSense must be connected with the same token. Leave it empty
 only for quick local testing on a trusted network.
 
 To generate a random token into `.env` before creating the container:
@@ -392,17 +397,17 @@ To generate a random token into `.env` before creating the container:
 python3 scripts/ensure_token.py .env
 ```
 
-If your main compose file lives one folder above `pbxpulse-agent`, run it from
+If your main compose file lives one folder above `pbxsense-agent`, run it from
 that parent folder like this:
 
 ```bash
-python3 ./pbxpulse-agent/scripts/ensure_token.py ./pbxpulse-agent/.env
+python3 ./pbxsense-agent/scripts/ensure_token.py ./pbxsense-agent/.env
 ```
 
-The script only fills `PBXPULSE_AGENT_TOKEN` when it is empty. It will not rotate
+The script only fills `PBXSENSE_AGENT_TOKEN` when it is empty. It will not rotate
 an existing token.
 
-PBXPulse defaults to the official Asterisk filesystem layout:
+PBXSense defaults to the official Asterisk filesystem layout:
 
 ```text
 ASTERISK_CDR_CSV_PATH=/var/log/asterisk/cdr-csv/Master.csv
@@ -431,11 +436,11 @@ Use that path only if your mounted `./asterisk/logs` folder actually contains
 ### Asterisk Docker Notes
 
 The `andrius/asterisk` image can be intentionally empty until you provide
-configuration files under the mounted config folder. PBXPulse expects standard
+configuration files under the mounted config folder. PBXSense expects standard
 Asterisk behavior, so make sure your Asterisk container has these basics:
 
 ```text
-/etc/asterisk/manager.conf      AMI enabled and a PBXPulse read user
+/etc/asterisk/manager.conf      AMI enabled and a PBXSense read user
 /etc/asterisk/cdr.conf          CDR enabled
 /etc/asterisk/cdr_csv.conf      CSV CDR backend enabled
 /etc/asterisk/pjsip.conf        PJSIP endpoints/trunks, or chan_sip if used
@@ -453,14 +458,14 @@ If that file does not appear after calls, enable/load the Asterisk CDR CSV
 backend in the Asterisk container before expecting Insights and Tips from call
 history.
 
-If this `pbxpulse-agent` repository lives beside the `asterisk` folder, keep:
+If this `pbxsense-agent` repository lives beside the `asterisk` folder, keep:
 
 ```text
 ASTERISK_LOGS_HOST_PATH=../asterisk/logs
 ASTERISK_SPOOL_HOST_PATH=../asterisk/spool
 ```
 
-If the PBXPulse Agent compose file is in the same folder as the `asterisk`
+If the PBXSense Agent compose file is in the same folder as the `asterisk`
 folder, change those two host paths to:
 
 ```text
@@ -468,25 +473,25 @@ ASTERISK_LOGS_HOST_PATH=./asterisk/logs
 ASTERISK_SPOOL_HOST_PATH=./asterisk/spool
 ```
 
-If your main compose file is one folder above `pbxpulse-agent` and also contains
+If your main compose file is one folder above `pbxsense-agent` and also contains
 the `asterisk` folder, use `docker-compose.parent-example.yml` as the shape for
-the PBXPulse service. In that layout the important paths are:
+the PBXSense service. In that layout the important paths are:
 
 ```yaml
 build:
-  context: ./pbxpulse-agent
+  context: ./pbxsense-agent
 env_file:
-  - ./pbxpulse-agent/.env
+  - ./pbxsense-agent/.env
 volumes:
   - ./asterisk/logs:/var/log/asterisk:ro
   - ./asterisk/spool:/var/spool/asterisk:ro
 ```
 
-`PBXPULSE_EXTENSION_NAMES` is optional. PBXPulse first tries to use endpoint
+`PBXSENSE_EXTENSION_NAMES` is optional. PBXSense first tries to use endpoint
 labels from AMI. Keep the mapping only if your PBX exposes numbers without
 friendly names, or if you want to rename them for the app.
 
-Keep all PBXPulse/Asterisk values in `.env`. The Dockerfile only sets Python
+Keep all PBXSense/Asterisk values in `.env`. The Dockerfile only sets Python
 runtime defaults such as unbuffered logging.
 
 Then start the Agent:
@@ -507,7 +512,7 @@ To pair the app, open the Agent pairing page:
 http://127.0.0.1:8765/pair
 ```
 
-If `PBXPULSE_AGENT_TOKEN` is set, requests from localhost, private LAN, or VPN
+If `PBXSENSE_AGENT_TOKEN` is set, requests from localhost, private LAN, or VPN
 client IPs are treated as trusted for Agent HTTP pages, JSON endpoints, and
 `/live`. Browser HTML pages also receive an HTTP-only cookie, and the real Agent
 token is not added to normal page links.
@@ -519,8 +524,8 @@ it for non-LAN or stricter future access:
 http://<agent-host>:8765/pair?token=your-token
 ```
 
-The QR contains a `pbxpulse://pair?...` payload with the Agent URL and token.
-PBXPulse setup can scan this QR and fill the Agent URL and token automatically.
+The QR contains a `pbxsense://pair?...` payload with the Agent URL and token.
+PBXSense setup can scan this QR and fill the Agent URL and token automatically.
 
 ## GitHub Release Assets
 
@@ -531,18 +536,18 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXPulseAgent-0.2.4-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.2.9-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
 generated files from `dist/`.
 
 The source-installer archive includes the Agent code, docs, install script, and
-uninstall script. It installs under `/opt/pbxpulse-agent`, creates the systemd
-service, writes `/etc/pbxpulse-agent.env`, and creates the Python virtual
+uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
+service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.2.4-beta`, attach the matching files from
+For a release tag such as `agent-v0.2.9-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 
@@ -554,8 +559,8 @@ Use mock mode only for local app or Agent development:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-PBXPULSE_AGENT_MODE=mock \
-  uvicorn pbxpulse_agent.main:app --host 0.0.0.0 --port 8765 --reload
+PBXSENSE_AGENT_MODE=mock \
+  uvicorn pbxsense_agent.main:app --host 0.0.0.0 --port 8765 --reload
 ```
 
 Open:
@@ -568,17 +573,17 @@ To run against AMI without installing a service:
 
 ```bash
 . .venv/bin/activate
-PBXPULSE_AGENT_MODE=ami \
+PBXSENSE_AGENT_MODE=ami \
 ASTERISK_AMI_HOST=127.0.0.1 \
 ASTERISK_AMI_PORT=5038 \
-ASTERISK_AMI_USERNAME=pbxpulse \
+ASTERISK_AMI_USERNAME=pbxsense \
 ASTERISK_AMI_PASSWORD=your-secret \
-  uvicorn pbxpulse_agent.main:app --host 0.0.0.0 --port 8765 --reload
+  uvicorn pbxsense_agent.main:app --host 0.0.0.0 --port 8765 --reload
 ```
 
 ## Troubleshooting AMI
 
-If `/home` says PBXPulse is trying to reach Asterisk, open:
+If `/home` says PBXSense is trying to reach Asterisk, open:
 
 ```text
 http://127.0.0.1:8765/diagnostics/ami
@@ -594,7 +599,7 @@ On the host running the Agent, also check:
 
 ```bash
 docker compose logs -f
-docker compose exec pbxpulse-agent sh -lc 'python - <<PY
+docker compose exec pbxsense-agent sh -lc 'python - <<PY
 import os, socket
 host=os.environ["ASTERISK_AMI_HOST"]
 port=int(os.environ["ASTERISK_AMI_PORT"])
@@ -609,7 +614,7 @@ receive AMI's greeting. The Agent will still try to log in, because some
 deployments may not send a useful banner. Check what the port sends:
 
 ```bash
-docker compose exec pbxpulse-agent sh -lc 'python - <<PY
+docker compose exec pbxsense-agent sh -lc 'python - <<PY
 import os, socket
 host=os.environ["ASTERISK_AMI_HOST"]
 port=int(os.environ["ASTERISK_AMI_PORT"])
@@ -623,11 +628,11 @@ A real AMI socket should start with something like `Asterisk Call Manager`.
 
 ### Volumes
 
-The compose file defines two named PBXPulse volumes:
+The compose file defines two named PBXSense volumes:
 
 ```yaml
-pbxpulse-agent-data:/var/lib/pbxpulse-agent
-pbxpulse-agent-logs:/var/log/pbxpulse-agent
+pbxsense-agent-data:/var/lib/pbxsense-agent
+pbxsense-agent-logs:/var/log/pbxsense-agent
 ```
 
 Agent v1 is mostly stateless, but these give the deployment stable
@@ -674,7 +679,7 @@ The exact AMI permissions depend on the PBX distribution, but Agent v1 needs to
 log in and read channel/endpoint status. A starting point looks like:
 
 ```ini
-[pbxpulse]
+[pbxsense]
 secret = your-secret
 read = system,call,reporting,command
 write =
@@ -691,9 +696,9 @@ Agent v1 intentionally starts small:
 - Reads active channels with `CoreShowChannels`.
 - Reads PJSIP endpoints with `PJSIPShowEndpoints`.
 - Tries to infer extension display names from AMI endpoint fields.
-- Produces `/home` in the PBXPulse app contract shape.
+- Produces `/home` in the PBXSense app contract shape.
 - Streams periodic `home_snapshot` events over `/live`.
 - Keeps raw AMI fields inside `technical`, one layer deeper.
 
-This is enough to test real data while preserving the PBXPulse philosophy:
+This is enough to test real data while preserving the PBXSense philosophy:
 Signals first, raw PBX second.

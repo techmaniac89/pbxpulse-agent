@@ -1,4 +1,4 @@
-# PBXPulse Agent Troubleshooting
+# PBXSense Agent Troubleshooting
 
 Start with the Agent landing page:
 
@@ -23,8 +23,8 @@ http://<agent-host>:8765/diagnostics/ami
 Linux service:
 
 ```bash
-systemctl status pbxpulse-agent
-journalctl -u pbxpulse-agent -f
+systemctl status pbxsense-agent
+journalctl -u pbxsense-agent -f
 ```
 
 Docker:
@@ -59,7 +59,7 @@ Common fixes:
 Minimal AMI user:
 
 ```ini
-[pbxpulse]
+[pbxsense]
 secret = your-secret
 read = system,call,reporting,command
 write =
@@ -85,6 +85,14 @@ Check the Event Socket password in:
 
 Then update `FREESWITCH_ESL_PASSWORD` and restart the Agent.
 
+## Yeastar API Checks
+
+Open `/diagnostics` and check `tokenAccepted` and `apiReachable`. If either is
+false, confirm `YEASTAR_BASE_URL`, Client ID, and Client Secret. In Yeastar,
+enable API access under `Integrations > API`; if IP restriction is enabled, add
+the Agent host. Keep `YEASTAR_VERIFY_TLS=true` unless the local PBX deliberately
+uses a trusted self-signed certificate.
+
 ## Pairing Problems
 
 If `/pair` opens locally but not from another device:
@@ -95,7 +103,7 @@ If `/pair` opens locally but not from another device:
   HTTP or `/live` access. The pairing payload still includes the token:
 
 ```text
-http://<agent-host>:8765/pair?token=<PBXPULSE_AGENT_TOKEN>
+http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
 ```
 
 If the token is missing, generate one:
@@ -107,7 +115,7 @@ python3 scripts/ensure_token.py .env
 For Linux service installs, the token is in:
 
 ```text
-/etc/pbxpulse-agent.env
+/etc/pbxsense-agent.env
 ```
 
 ## Missing History Or Voicemail
@@ -117,8 +125,9 @@ If live calls work but history, tips, or voicemail evidence is missing:
 - Check `/diagnostics` for the `history` section.
 - Confirm `ASTERISK_CDR_CSV_PATH` points to the CDR CSV visible inside the Agent runtime.
 - Confirm `ASTERISK_VOICEMAIL_PATH` points to the voicemail spool visible inside the Agent runtime.
+- Confirm `ASTERISK_RECORDINGS_PATH` points to the MixMonitor root visible inside the Agent runtime.
 - For Docker, confirm the host log and spool folders are mounted read-only.
-- For Linux service installs, confirm the `pbxpulse` service user can traverse
+- For Linux service installs, confirm the `pbxsense` service user can traverse
   each parent folder and read the CDR/voicemail files. Home directories are
   often private, so paths under `/home/...` may need ACLs or a shared mount.
 
@@ -132,6 +141,10 @@ Common CDR paths:
 If journalctl shows `Permission denied`, either move/mount the Asterisk logs
 under a service-readable path or grant read/traverse access. Also check for
 typos: Asterisk commonly uses `cdr-custom`, not `csv-custom`.
+
+For recorded calls, a standard Asterisk CSV only advertises a recording when its
+CDR `userfield` contains the recording filename. The Agent never exposes host
+paths: it serves matching audio only through `GET /recordings/{recording-id}`.
 
 ## Docker Network Problems
 

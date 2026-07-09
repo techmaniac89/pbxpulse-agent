@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .connectors import connector_for_settings
 from .history import history_diagnostics, read_recent_cdr_calls, read_recent_voicemails
@@ -17,20 +17,21 @@ from .live import home_live_events
 from .mock import mock_snapshot
 from .network import is_private_or_loopback_host
 from .pulse import build_home_payload
+from .recordings import find_recording
 from .settings import AgentSettings
 from .version import AGENT_VERSION
 
 settings = AgentSettings.from_env()
 connector = connector_for_settings(settings)
-app = FastAPI(title="PBXPulse Agent", version=AGENT_VERSION)
-LOCAL_WEB_COOKIE = "pbxpulse_agent_local_web"
+app = FastAPI(title="PBXSense Agent", version=AGENT_VERSION)
+LOCAL_WEB_COOKIE = "pbxsense_agent_local_web"
 LIVE_INTERVAL_SECONDS = 1
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET"],
-    allow_headers=["authorization", "x-pbxpulse-token"],
+    allow_headers=["authorization", "x-pbxsense-token"],
 )
 
 
@@ -43,7 +44,7 @@ def index(request: Request):
     ok = diagnostics["ok"]
     status_text = "Connected" if ok else "Needs attention"
     status_detail = (
-        f"The Agent can talk to {settings.display_name} and PBXPulse can use live snapshots."
+        f"The Agent can talk to {settings.display_name} and PBXSense can use live snapshots."
         if ok
         else f"The Agent is running, but {settings.display_name} still needs a little attention."
     )
@@ -69,7 +70,7 @@ def index(request: Request):
         """
 
     return _page(
-        title="PBXPulse Agent",
+        title="PBXSense Agent",
         body=f"""
           <section class="hero-card">
             {_brand_html()}
@@ -301,7 +302,7 @@ def home(request: Request):
     _require_token(request)
     payload = _home_payload(moment_hours=_moment_hours(request))
     if _wants_html(request):
-        return HTMLResponse(_json_page(request, "PBXPulse home snapshot", payload))
+        return HTMLResponse(_json_page(request, "PBXSense home snapshot", payload))
     return JSONResponse(payload)
 
 
@@ -313,13 +314,13 @@ def pair(request: Request):
     payload = _pairing_payload(request)
     qr_svg = _qr_svg(payload)
     return _page(
-        title="Pair PBXPulse",
+        title="Pair PBXSense",
         body=f"""
           <section class="hero-card">
             {_brand_html()}
             <div class="status ok">
               <span class="dot"></span>
-              <span>Pairing ready<small>Scan this QR with PBXPulse setup, or paste the pairing text.</small></span>
+              <span>Pairing ready<small>Scan this QR with PBXSense setup, or paste the pairing text.</small></span>
             </div>
             <div class="qr">{qr_svg}</div>
             <div class="pairing-code">{escape(payload)}</div>
@@ -345,6 +346,31 @@ def diagnostics(request: Request):
     return _diagnostics_response(request)
 
 
+@app.get("/recordings/{recording_id}")
+def recording(recording_id: str, request: Request):
+    _require_token(request)
+    if settings.pbx_type == "yeastar":
+        try:
+            content, filename, media_type = connector.download_recording(recording_id)
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=content,
+            media_type=media_type if media_type != "application/octet-stream" else "audio/wav",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+    root = (
+        settings.freeswitch_recordings_path
+        if settings.pbx_type == "freeswitch"
+        else settings.asterisk_recordings_path
+    )
+    path = find_recording(root, recording_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Recording was not found in the configured root")
+    return FileResponse(path, filename=path.name)
+
+
 def _diagnostics_response(request: Request):
     payload = connector.diagnostics()
     if settings.pbx_type == "asterisk":
@@ -353,7 +379,7 @@ def _diagnostics_response(request: Request):
             settings.voicemail_path,
         )
     if _wants_html(request):
-        return HTMLResponse(_json_page(request, "PBXPulse diagnostics", payload))
+        return HTMLResponse(_json_page(request, "PBXSense diagnostics", payload))
     return JSONResponse(payload)
 
 
@@ -427,12 +453,16 @@ def _valid_moment_hours(value: object) -> int:
 def _pbx_host() -> str:
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_host
+    if settings.pbx_type == "yeastar":
+        return settings.yeastar_base_url
     return settings.host
 
 
 def _pbx_port() -> int | str:
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_port
+    if settings.pbx_type == "yeastar":
+        return "https"
     return settings.port
 
 
@@ -446,7 +476,7 @@ def _brand_html() -> str:
           </svg>
         </div>
         <div>
-          <h1>PBXPulse Agent</h1>
+          <h1>PBXSense Agent</h1>
           <p class="subtitle">{escape(settings.display_name)}</p>
         </div>
       </div>
@@ -501,7 +531,7 @@ def _require_token(request: Request) -> None:
         return
     token = _request_token(request)
     if not hmac.compare_digest(token, settings.token):
-        raise HTTPException(status_code=401, detail="PBXPulse Agent token required")
+        raise HTTPException(status_code=401, detail="PBXSense Agent token required")
 
 
 def _localhost_cookie_redirect(request: Request) -> RedirectResponse | None:
@@ -537,7 +567,7 @@ def _has_valid_local_web_cookie(request: Request) -> bool:
 def _local_web_cookie_value() -> str:
     return hmac.new(
         settings.token.encode("utf-8"),
-        b"pbxpulse-local-web",
+        b"pbxsense-local-web",
         hashlib.sha256,
     ).hexdigest()
 
@@ -555,7 +585,7 @@ def _request_token(request: Request) -> str:
         return settings.token
     if _has_valid_local_web_cookie(request):
         return settings.token
-    return request.headers.get("x-pbxpulse-token", "").strip()
+    return request.headers.get("x-pbxsense-token", "").strip()
 
 
 def _websocket_authorized(websocket: WebSocket) -> bool:
@@ -585,7 +615,7 @@ def _pairing_payload(request: Request) -> str:
     query = {"agent": agent_url}
     if settings.token:
         query["token"] = settings.token
-    return "pbxpulse://pair?" + urlencode(query)
+    return "pbxsense://pair?" + urlencode(query)
 
 
 def _qr_svg(payload: str) -> str:

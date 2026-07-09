@@ -1,19 +1,19 @@
 services:
-  pbxpulse-agent:
+  pbxsense-agent:
     build:
-      context: ./pbxpulse-agent
-    container_name: pbxpulse-agent
+      context: ./pbxsense-agent
+    container_name: pbxsense-agent
     restart: unless-stopped
     network_mode: host
     env_file:
-      - ./pbxpulse-agent/.env
+      - ./pbxsense-agent/.env
     volumes:
-      - pbxpulse-agent-data:/var/lib/pbxpulse-agent
-      - pbxpulse-agent-logs:/var/log/pbxpulse-agent
+      - pbxsense-agent-data:/var/lib/pbxsense-agent
+      - pbxsense-agent-logs:/var/log/pbxsense-agent
       - ./asterisk/logs:/var/log/asterisk:ro
       - ./asterisk/spool:/var/spool/asterisk:ro
       - /etc/localtime:/etc/localtime:ro
 
 volumes:
-  pbxpulse-agent-data:
-  pbxpulse-agent-logs:
+  pbxsense-agent-data:
+  pbxsense-agent-logs:

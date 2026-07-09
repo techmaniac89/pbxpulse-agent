@@ -1,13 +1,13 @@
-# PBXPulse Agent Connectors
+# PBXSense Agent Connectors
 
-PBXPulse Agent is open source so PBX support should be easy to extend without
-changing the PBXPulse app.
+PBXSense Agent is open source so PBX support should be easy to extend without
+changing the PBXSense app.
 
-A connector observes one PBX family and translates it into PBXPulse concepts.
+A connector observes one PBX family and translates it into PBXSense concepts.
 The app should not know whether the source is Asterisk, FreeSWITCH, CUCM, or
 something else.
 
-Connectors live inside this agent repository under `pbxpulse_agent/`. They are
+Connectors live inside this agent repository under `pbxsense_agent/`. They are
 responsible for PBX-specific access, authentication, parsing, and diagnostics.
 Everything they return should already be shaped for the Agent engine, not for a
 specific vendor UI or raw protocol feed.
@@ -28,12 +28,13 @@ PBX connector
 | FreePBX, Issabel, VitalPBX | `ami.py` | Supported as Asterisk-based systems |
 | FreeSWITCH | `freeswitch.py` | Event Socket connection, active channels, optional JSON CDR/voicemail paths |
 | FusionPBX | `freeswitch.py` | Supported as a FreeSWITCH-based system |
+| Yeastar P-Series | `yeastar.py` | OAuth API, extension status, live calls, CDR, voicemail, recordings |
 | Mock | `mock.py` | Development/test fixture |
 
 GUI PBX distributions are handled through the PBX engine underneath them.
 FreePBX, Issabel, and VitalPBX still expose Asterisk AMI. FusionPBX still uses
 FreeSWITCH Event Socket. Their web interfaces do not need separate connectors
-unless PBXPulse later wants distribution-specific settings, provisioning, or
+unless PBXSense later wants distribution-specific settings, provisioning, or
 dashboard metadata.
 
 The Asterisk connector reads PJSIP endpoints and also asks for classic
@@ -42,7 +43,7 @@ The Asterisk connector reads PJSIP endpoints and also asks for classic
 ## Connector Contract
 
 Every runtime connector implements the `PBXConnector` protocol from
-`pbxpulse_agent/connectors.py`:
+`pbxsense_agent/connectors.py`:
 
 ```python
 class PBXConnector(Protocol):
@@ -71,7 +72,7 @@ shape until the internal model is renamed.
 
 ## Add A Connector
 
-1. Create `pbxpulse_agent/<pbx_name>.py`.
+1. Create `pbxsense_agent/<pbx_name>.py`.
 2. Implement a class with:
 
 ```python
@@ -92,7 +93,7 @@ class ExampleClient:
 6. Keep raw PBX details in diagnostics or `technical` evidence, not the first
    app layer.
 7. Register the connector in `connector_for_settings()` in
-   `pbxpulse_agent/connectors.py`.
+   `pbxsense_agent/connectors.py`.
 8. Add environment variables to `.env.example`.
 9. Add installer detection only if the PBX can be detected safely.
 10. Add tests for connector selection and at least one mapping example.
@@ -111,18 +112,18 @@ class ExampleClient:
 
 ## Configuration Rules
 
-Add connector settings to `pbxpulse_agent/settings.py` and `.env.example`.
+Add connector settings to `pbxsense_agent/settings.py` and `.env.example`.
 Prefer explicit environment variable prefixes for each PBX family:
 
 ```text
 EXAMPLE_PBX_HOST=127.0.0.1
 EXAMPLE_PBX_PORT=1234
-EXAMPLE_PBX_USERNAME=pbxpulse
+EXAMPLE_PBX_USERNAME=pbxsense
 EXAMPLE_PBX_PASSWORD=
 ```
 
 Register the new connector in `connector_for_settings()` and add a
-`PBXPULSE_PBX_TYPE` value or alias only when it maps cleanly to one connector.
+`PBXSENSE_PBX_TYPE` value or alias only when it maps cleanly to one connector.
 GUI distribution aliases should resolve to the engine connector unless the GUI
 itself becomes a required integration surface.
 
@@ -154,3 +155,22 @@ FREESWITCH_VOICEMAIL_PATH=/var/lib/freeswitch/storage/voicemail
 
 Those paths are disabled by default because FreeSWITCH CDR and voicemail storage
 layout depends on enabled modules and distribution packaging.
+
+## Yeastar P-Series Notes
+
+The Yeastar connector supports both local P-Series PBXs and P-Series Cloud
+Edition through the P-Series OpenAPI. Enable API access under `Integrations >
+API`, create a Client ID and Client Secret, and allow the Agent host when IP
+restriction is enabled.
+
+```text
+PBXSENSE_PBX_TYPE=yeastar
+YEASTAR_BASE_URL=https://pbx.example.com
+YEASTAR_CLIENT_ID=<client-id>
+YEASTAR_CLIENT_SECRET=<client-secret>
+```
+
+The connector uses the documented `extension/search`, `call/query`, `cdr/list`,
+`vm/query`, and recording endpoints. It refreshes cloud state internally at a
+small fixed cadence because the Agent's web socket updates every second; this is
+not a user-configurable refresh control.

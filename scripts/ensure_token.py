@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-TOKEN_KEY = "PBXPULSE_AGENT_TOKEN"
+TOKEN_KEY = "PBXSENSE_AGENT_TOKEN"
 
 
 def main() -> int:

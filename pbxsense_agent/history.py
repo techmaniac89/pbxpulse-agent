@@ -21,6 +21,7 @@ class CdrCall:
     destination_channel: str = ""
     last_app: str = ""
     last_data: str = ""
+    recording_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def read_recent_cdr_calls(path: str, *, limit: int = 30) -> list[CdrCall]:
                 destination_channel=row[6].strip() if len(row) > 6 else "",
                 last_app=row[7].strip() if len(row) > 7 else "",
                 last_data=row[8].strip() if len(row) > 8 else "",
+                recording_id=_recording_id_from_row(row),
             )
         )
 
@@ -249,3 +251,15 @@ def _parse_int(raw: str) -> int:
         return int(raw)
     except ValueError:
         return 0
+
+
+def _recording_id_from_row(row: list[str]) -> str:
+    # CDR userfield is the only standard CSV location that explicitly denotes
+    # a recording filename. Unique IDs exist for every call, recorded or not.
+    if len(row) > 17 and row[17].strip():
+        return _recording_filename(row[17])
+    return ""
+
+
+def _recording_filename(value: str) -> str:
+    return value.strip().replace("\\", "/").rsplit("/", 1)[-1]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from .engine import build_engine_signals
@@ -237,7 +238,7 @@ def _build_signals(
                 "category": "health",
                 "importance": "important",
                 "state": "active",
-                "title": "PBXPulse Agent is trying to reach the PBX.",
+                "title": "PBXSense Agent is trying to reach the PBX.",
                 "body": snapshot.error or "The Agent could not read the PBX yet.",
                 "timeLabel": "Just now",
                 "actionLabel": None,
@@ -274,7 +275,7 @@ def _build_signals(
                     "actionLabel": None,
                     "why": [
                         "The PBX reported an active channel on a trunk endpoint.",
-                        "PBXPulse classified this endpoint as a trunk, not a phone.",
+                        "PBXSense classified this endpoint as a trunk, not a phone.",
                     ],
                     "technical": {
                         "channel": channel.channel,
@@ -315,7 +316,7 @@ def _build_signals(
                 "actionLabel": None,
                 "why": [
                     "The PBX reported an active channel.",
-                    "PBXPulse mapped the channel to an extension.",
+                    "PBXSense mapped the channel to an extension.",
                 ],
                 "technical": {
                     "channel": channel.channel,
@@ -351,7 +352,7 @@ def _build_signals(
                     "actionLabel": "Open person",
                     "why": [
                         "The PBX reported the endpoint as unavailable.",
-                        "PBXPulse treats device availability as an office health signal.",
+                        "PBXSense treats device availability as an office health signal.",
                     ],
                     "technical": {
                         "extension": endpoint.extension,
@@ -385,7 +386,7 @@ def _moment_signals(
                 "importance": "feed",
                 "state": "active",
                 "title": "Calls are moving right now.",
-                "body": "PBXPulse sees live call activity and is keeping the moment visible.",
+                "body": "PBXSense sees live call activity and is keeping the moment visible.",
                 "timeLabel": "Now",
                 "actionLabel": None,
                 "why": [
@@ -419,7 +420,7 @@ def _moment_signals(
             "why": [
                 "The PBX connector responded successfully.",
                 moment["why"],
-                "PBXPulse chooses one useful daily Moment so the feed feels alive without becoming noisy.",
+                "PBXSense chooses one useful daily Moment so the feed feels alive without becoming noisy.",
             ],
             "technical": {
                 **moment["technical"],
@@ -454,8 +455,8 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_daily_flow_moment",
                 "title": f"{len(recent_calls)} {call_word} passed through in the {window_label}.",
-                "body": "PBXPulse sees the day's call flow and is keeping a calm eye on it.",
-                "why": f"PBXPulse counted recent call history inside the {window_label}.",
+                "body": "PBXSense sees the day's call flow and is keeping a calm eye on it.",
+                "why": f"PBXSense counted recent call history inside the {window_label}.",
             }
         )
 
@@ -464,7 +465,7 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_answered_cleanly_moment",
                 "title": "Recent calls are being answered cleanly.",
-                "body": f"PBXPulse found answered calls without missed-call pressure in the {window_label}.",
+                "body": f"PBXSense found answered calls without missed-call pressure in the {window_label}.",
                 "why": "Recent call history has answered calls and no missed calls.",
             }
         )
@@ -474,7 +475,7 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_missed_weight_moment",
                 "title": "Missed calls shaped the day more than answered calls.",
-                "body": f"PBXPulse noticed the {window_label} leaned toward calls that did not connect.",
+                "body": f"PBXSense noticed the {window_label} leaned toward calls that did not connect.",
                 "why": "Missed calls outnumbered answered calls in recent history.",
             }
         )
@@ -486,7 +487,7 @@ def _daily_behavior_moment(
                 "kind": "pbx_busy_hour_moment",
                 "title": f"Calls clustered around {hour}.",
                 "body": f"{count} call(s) landed in that hour during the {window_label}.",
-                "why": "PBXPulse grouped recent calls by hour and found the busiest one.",
+                "why": "PBXSense grouped recent calls by hour and found the busiest one.",
             }
         )
 
@@ -497,7 +498,7 @@ def _daily_behavior_moment(
                     "kind": "pbx_busier_than_previous_window_moment",
                     "title": "The PBX is busier than the previous window.",
                     "body": f"The {window_label} has more visible call flow than the window before it.",
-                    "why": f"PBXPulse compared the {window_label} with the same period before it.",
+                    "why": f"PBXSense compared the {window_label} with the same period before it.",
                 }
             )
         elif len(recent_calls) <= max(1, len(previous_window_calls) * 0.45):
@@ -506,7 +507,7 @@ def _daily_behavior_moment(
                     "kind": "pbx_quieter_than_previous_window_moment",
                     "title": "The PBX is quieter than the previous window.",
                     "body": f"The {window_label} has less visible call flow than the window before it.",
-                    "why": f"PBXPulse compared the {window_label} with the same period before it.",
+                    "why": f"PBXSense compared the {window_label} with the same period before it.",
                 }
             )
 
@@ -515,19 +516,19 @@ def _daily_behavior_moment(
             {
                 "kind": "pbx_reachable_moment",
                 "title": "The PBX is reachable right now.",
-                "body": "PBXPulse is connected and waiting for something meaningful to happen.",
+                "body": "PBXSense is connected and waiting for something meaningful to happen.",
                 "why": "No live call or recent call history needed attention.",
             },
             {
                 "kind": "pbx_calm_day_moment",
                 "title": "The PBX has had a quiet day so far.",
-                "body": "PBXPulse can reach the PBX, but recent call history is calm.",
+                "body": "PBXSense can reach the PBX, but recent call history is calm.",
                 "why": "The PBX is reachable and no recent call history was visible.",
             },
             {
                 "kind": "pbx_ready_moment",
                 "title": "The PBX is ready and waiting.",
-                "body": "PBXPulse is connected and will surface activity when the day starts moving.",
+                "body": "PBXSense is connected and will surface activity when the day starts moving.",
                 "why": "The PBX connector responded and no active calls were present.",
             },
         ]
@@ -622,7 +623,7 @@ def _trunk_signals(
                 "actionLabel": None,
                 "why": [
                     "The PBX reported a trunk-like endpoint as unavailable.",
-                    "PBXPulse monitors trunks separately from phones and extensions.",
+                    "PBXSense monitors trunks separately from phones and extensions.",
                 ],
                 "technical": {
                     "endpoint": endpoint.extension,
@@ -647,7 +648,7 @@ def _trunk_signals(
                 "actionLabel": None,
                 "why": [
                     "The PBX reported active channels on a trunk-like endpoint.",
-                    "PBXPulse treats trunk traffic as PBX activity, not a person status.",
+                    "PBXSense treats trunk traffic as PBX activity, not a person status.",
                 ],
                 "technical": {
                     "endpoint": endpoint.extension,
@@ -738,15 +739,20 @@ def _calls_from_history(
         else:
             continue
 
-        calls.append(
-            {
+        call = {
                 "title": title,
                 "body": body,
                 "timeLabel": _time_label(record.started_at, now),
                 "isActive": False,
                 "kind": kind,
+        }
+        if record.recording_id:
+            call["recording"] = {
+                "available": True,
+                "id": record.recording_id,
+                "url": f"/recordings/{quote(record.recording_id, safe='')}",
             }
-        )
+        calls.append(call)
     return calls
 
 
@@ -880,7 +886,7 @@ def _mood(
     signals: list[dict],
 ) -> str:
     if not snapshot.reachable:
-        return "PBXPulse is trying to reach the PBX."
+        return "PBXSense is trying to reach the PBX."
     if any(signal["importance"] in {"attention", "important"} for signal in signals):
         return "There is something worth watching."
     if active_channels:

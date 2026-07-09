@@ -7,29 +7,31 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from pbxpulse_agent.ami import (
+from pbxsense_agent.ami import (
     AmiEvent,
     _endpoint_role,
     _endpoints_from_events,
     _number_from_pjsip_value,
 )
-from pbxpulse_agent.connectors import connector_for_settings
-from pbxpulse_agent.freeswitch import (
+from pbxsense_agent.connectors import connector_for_settings
+from pbxsense_agent.freeswitch import (
     FreeSwitchClient,
     _channel_from_row,
     _read_json_cdr_calls,
     _read_voicemails as _read_freeswitch_voicemails,
 )
-from pbxpulse_agent.history import (
+from pbxsense_agent.recordings import find_recording
+from pbxsense_agent.history import (
     CdrCall,
     history_diagnostics,
     read_recent_cdr_calls,
     read_recent_voicemails,
 )
-from pbxpulse_agent.live import home_live_events
-from pbxpulse_agent.network import is_private_or_loopback_host
-from pbxpulse_agent.pulse import AmiChannel, AmiEndpoint, AmiSnapshot, build_home_payload
-from pbxpulse_agent.settings import AgentSettings, _normalize_pbx_type
+from pbxsense_agent.live import home_live_events
+from pbxsense_agent.network import is_private_or_loopback_host
+from pbxsense_agent.pulse import AmiChannel, AmiEndpoint, AmiSnapshot, build_home_payload
+from pbxsense_agent.settings import AgentSettings, _normalize_pbx_type
+from pbxsense_agent.yeastar import YeastarClient, _channels_from_call_response
 
 
 class PulseMappingTest(unittest.TestCase):
@@ -38,6 +40,7 @@ class PulseMappingTest(unittest.TestCase):
         self.assertEqual(_normalize_pbx_type("issabel"), "asterisk")
         self.assertEqual(_normalize_pbx_type("vitalpbx"), "asterisk")
         self.assertEqual(_normalize_pbx_type("fusionpbx"), "freeswitch")
+        self.assertEqual(_normalize_pbx_type("yeastar-p-series"), "yeastar")
 
     def test_connector_factory_can_select_freeswitch(self) -> None:
         settings = AgentSettings(
@@ -64,6 +67,118 @@ class PulseMappingTest(unittest.TestCase):
         connector = connector_for_settings(settings)
 
         self.assertIsInstance(connector, FreeSwitchClient)
+
+    def test_connector_factory_can_select_yeastar(self) -> None:
+        settings = AgentSettings(
+            mode="yeastar",
+            pbx_type="yeastar",
+            host="127.0.0.1",
+            port=5038,
+            username="",
+            password="",
+            freeswitch_host="127.0.0.1",
+            freeswitch_port=8021,
+            freeswitch_password="",
+            freeswitch_cdr_json_path="",
+            freeswitch_voicemail_path="",
+            display_name="Yeastar P-Series",
+            timeout_seconds=3,
+            extension_names={},
+            cdr_csv_path="",
+            voicemail_path="",
+            timezone="UTC",
+            token="",
+            yeastar_base_url="https://pbx.example.test",
+            yeastar_client_id="client-id",
+            yeastar_client_secret="client-secret",
+        )
+
+        self.assertIsInstance(connector_for_settings(settings), YeastarClient)
+
+    def test_yeastar_active_call_response_maps_to_snapshot_channels(self) -> None:
+        channels = _channels_from_call_response(
+            {
+                "data": [
+                    {
+                        "call_id": "call-1",
+                        "members": [
+                            {
+                                "inbound": {
+                                    "from": "2105550100",
+                                    "to": "1000",
+                                    "channel_id": "PJSIP/trunk-1",
+                                    "member_status": "RING",
+                                }
+                            },
+                            {
+                                "extension": {
+                                    "number": "1000",
+                                    "channel_id": "PJSIP/1000-1",
+                                    "member_status": "RING",
+                                }
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(channels[0].caller_number, "2105550100")
+        self.assertEqual(channels[0].extension, "1000")
+        self.assertEqual(channels[1].endpoint, "1000")
+        self.assertEqual(channels[1].linked_id, "call-1")
+
+    def test_yeastar_cdr_maps_recording_metadata_without_exposing_a_vendor_url(self) -> None:
+        settings = AgentSettings(
+            mode="yeastar",
+            pbx_type="yeastar",
+            host="",
+            port=0,
+            username="",
+            password="",
+            freeswitch_host="",
+            freeswitch_port=0,
+            freeswitch_password="",
+            freeswitch_cdr_json_path="",
+            freeswitch_voicemail_path="",
+            display_name="Yeastar P-Series",
+            timeout_seconds=3,
+            extension_names={},
+            cdr_csv_path="",
+            voicemail_path="",
+            timezone="UTC",
+            token="",
+        )
+        client = YeastarClient(settings)
+        with patch.object(
+            client,
+            "_api",
+            return_value={
+                "data": [
+                    {
+                        "call_from_number": "1000",
+                        "call_to_number": "2105550100",
+                        "disposition": "ANSWERED",
+                        "time": "2026-07-09 13:30:00",
+                        "duration": 42,
+                        "record_file": "20260709-1000-2105550100.wav",
+                    }
+                ]
+            },
+        ):
+            calls = client._cdr_calls()
+
+        self.assertEqual(calls[0].recording_id, "20260709-1000-2105550100.wav")
+
+    def test_recording_locator_never_returns_files_outside_the_configured_root(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "20260626-171943-1000-1001.wav"
+            recording.write_bytes(b"audio")
+
+            found = find_recording(str(root), "171943-1000")
+
+        self.assertEqual(found, recording)
 
     def test_freeswitch_json_cdr_and_voicemail_paths_are_optional_history_sources(self) -> None:
         with TemporaryDirectory() as directory:
@@ -102,7 +217,7 @@ class PulseMappingTest(unittest.TestCase):
         self.assertFalse(is_private_or_loopback_host("8.8.8.8"))
         self.assertFalse(is_private_or_loopback_host("example.com"))
 
-    def test_freeswitch_channel_row_maps_to_pbxpulse_snapshot_channel(self) -> None:
+    def test_freeswitch_channel_row_maps_to_pbxsense_snapshot_channel(self) -> None:
         channel = _channel_from_row(
             {
                 "uuid": "call-1",
@@ -767,6 +882,25 @@ class PulseMappingTest(unittest.TestCase):
         self.assertIn("Reception called Support.", titles)
         self.assertIn("Sales missed 104.", titles)
         self.assertIn("missed", {call["kind"] for call in payload["calls"]})
+
+    def test_cdr_userfield_adds_a_protected_recording_reference(self) -> None:
+        with TemporaryDirectory() as directory:
+            cdr_path = Path(directory) / "Master.csv"
+            cdr_path.write_text(
+                '"","101","102","from-internal","101","PJSIP/101","PJSIP/102","Dial","","2026-06-26 20:00:00","2026-06-26 20:00:02","2026-06-26 20:01:02","62","60","ANSWERED","","1","/var/spool/asterisk/monitor/call-1.wav"\n',
+                encoding="utf-8",
+            )
+            records = read_recent_cdr_calls(str(cdr_path))
+
+        payload = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", recent_calls=records),
+            display_name="Office PBX",
+            extension_names={},
+            now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
+        )
+
+        self.assertEqual(payload["calls"][0]["recording"]["id"], "call-1.wav")
+        self.assertEqual(payload["calls"][0]["recording"]["url"], "/recordings/call-1.wav")
 
     def test_cdr_history_does_not_replace_current_moment(self) -> None:
         record = CdrCall(

@@ -1,4 +1,5 @@
 .env
+CODEX.md
 .venv/
 __pycache__/
 *.pyc

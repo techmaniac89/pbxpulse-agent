@@ -1,5 +1,5 @@
 services:
-  pbxpulse-agent:
+  pbxsense-agent:
     network_mode: bridge
     ports:
       - "8765:8765"

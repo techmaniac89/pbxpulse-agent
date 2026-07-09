@@ -7,6 +7,7 @@ from .freeswitch import FreeSwitchClient
 from .mock import mock_snapshot
 from .pulse import AmiSnapshot
 from .settings import AgentSettings
+from .yeastar import YeastarClient
 
 
 class PBXConnector(Protocol):
@@ -40,4 +41,6 @@ def connector_for_settings(settings: AgentSettings) -> PBXConnector:
         return MockConnector()
     if settings.pbx_type == "freeswitch":
         return FreeSwitchClient(settings)
+    if settings.pbx_type == "yeastar":
+        return YeastarClient(settings)
     return AmiClient(settings)

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.4-beta",
+    [string]$Version = "0.2.9-beta",
     [string]$OutputDir = ""
 )
 
@@ -34,13 +34,14 @@ if ($Python) {
     }
 }
 
-$SourcePackageName = "PBXPulseAgent-$Version-linux-source-installer"
+$SourcePackageName = "PBXSenseAgent-$Version-linux-source-installer"
 $AgentEntries = @(
-    "pbxpulse_agent",
+    "pbxsense_agent",
     "scripts",
     "docs",
     "requirements.txt",
     ".env.example",
+    "CODEX.md",
     "README.md",
     "SECURITY.md",
     "Dockerfile",
@@ -133,7 +134,7 @@ function New-SourceInstallerArchive {
     Copy-AgentPayload $StageRoot
 
     Write-Utf8NoBom (Join-Path $StageRoot "INSTALL.txt") @"
-PBXPulse Agent $Version
+PBXSense Agent $Version
 Target: generic Linux source installer
 
 Use this archive for non-Debian Linux systems, manual installs, or systems
@@ -148,12 +149,12 @@ registers the systemd service.
 "@
 
     Write-Utf8NoBom (Join-Path $StageRoot "RELEASE-MANIFEST.txt") @"
-name=PBXPulse Agent
+name=PBXSense Agent
 version=$Version
 target=linux-source-installer
 format=source-installer
 installer=scripts/install_linux.sh
-service=pbxpulse-agent
+service=pbxsense-agent
 requires=python3,python3-venv,python3-pip,systemd
 "@
 

@@ -70,7 +70,7 @@ def _missed_call_recommendations(
                 "timeLabel": "Today",
                 "actionLabel": None,
                 "why": [
-                    f"PBXPulse found {count} recent calls that did not connect.",
+                    f"PBXSense found {count} recent calls that did not connect.",
                     "The calls point to the same destination.",
                 ],
                 "technical": {
@@ -106,16 +106,16 @@ def _call_mix_insights(
 
     if answered == 0 and missed == 0 and ivr_reached > 0 and voicemail_count == 0:
         title = "Recent callers reached the IVR."
-        body = "PBXPulse saw callers reach the PBX menu without human missed-call pressure."
+        body = "PBXSense saw callers reach the PBX menu without human missed-call pressure."
     elif missed == 0 and voicemail_count == 0:
         title = "Recent calls are being handled cleanly."
-        body = "PBXPulse did not find missed calls or voicemail pressure in the latest history."
+        body = "PBXSense did not find missed calls or voicemail pressure in the latest history."
     elif missed > answered:
         title = "Missed calls are higher than answered calls."
         body = "Recent call history may deserve a quick look."
     elif voicemail_count > 0:
         title = "Voicemail is part of today's call flow."
-        body = "PBXPulse found recent voicemail activity alongside call history."
+        body = "PBXSense found recent voicemail activity alongside call history."
     else:
         title = "Recent call flow looks balanced."
         body = "Answered and missed calls are both visible, without a strong pattern yet."
@@ -132,7 +132,7 @@ def _call_mix_insights(
             "timeLabel": "Today",
             "actionLabel": None,
             "why": [
-                "PBXPulse compared answered calls, missed calls, and voicemail activity.",
+                "PBXSense compared answered calls, missed calls, and voicemail activity.",
                 "This is derived from recent call history visible to the Agent.",
             ],
             "technical": {
@@ -173,7 +173,7 @@ def _rhythm_insights(recent_calls: list[CdrCall], now: datetime) -> list[dict]:
                 "importance": "feed",
                 "state": "active",
                 "title": "Today is busier than this weekday usually is.",
-                "body": "PBXPulse compared today with recent matching weekdays.",
+                "body": "PBXSense compared today with recent matching weekdays.",
                 "timeLabel": "Today",
                 "actionLabel": None,
                 "why": [
@@ -196,7 +196,7 @@ def _rhythm_insights(recent_calls: list[CdrCall], now: datetime) -> list[dict]:
                 "importance": "feed",
                 "state": "active",
                 "title": "Today is quieter than this weekday usually is.",
-                "body": "PBXPulse compared today with recent matching weekdays.",
+                "body": "PBXSense compared today with recent matching weekdays.",
                 "timeLabel": "Today",
                 "actionLabel": None,
                 "why": [
@@ -226,7 +226,7 @@ def _rhythm_insights(recent_calls: list[CdrCall], now: datetime) -> list[dict]:
                 "timeLabel": "This month",
                 "actionLabel": None,
                 "why": [
-                    f"PBXPulse found {count} call(s) around {hour:02d}:00.",
+                    f"PBXSense found {count} call(s) around {hour:02d}:00.",
                     "This came from the local call history visible to the Agent.",
                 ],
                 "technical": {
@@ -311,7 +311,7 @@ def _endpoint_recommendations(
             "actionLabel": None,
             "why": [
                 "AMI reported more than one extension as unavailable.",
-                "PBXPulse groups related endpoint trouble before suggesting action.",
+                "PBXSense groups related endpoint trouble before suggesting action.",
             ],
             "technical": {
                 "extensions": ", ".join(endpoint.extension for endpoint in unavailable),
@@ -393,11 +393,11 @@ def _security_signals(
                 "importance": "attention",
                 "state": "active",
                 "title": "Several calls failed close together.",
-                "body": "PBXPulse grouped repeated failed call attempts for review.",
+                "body": "PBXSense grouped repeated failed call attempts for review.",
                 "timeLabel": "Today",
                 "actionLabel": None,
                 "why": [
-                    f"PBXPulse found {len(failed_calls)} failed or congested recent calls.",
+                    f"PBXSense found {len(failed_calls)} failed or congested recent calls.",
                     "Repeated failures can point to routing, trunk, or unwanted call attempts.",
                 ],
                 "technical": {
@@ -428,7 +428,7 @@ def _security_signals(
                 "actionLabel": None,
                 "why": [
                     "AMI reported a trunk endpoint as unavailable.",
-                    "PBXPulse treats trunk availability as both service health and routing risk.",
+                    "PBXSense treats trunk availability as both service health and routing risk.",
                 ],
                 "technical": {
                     "endpoint": endpoint.extension,

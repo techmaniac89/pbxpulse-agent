@@ -24,12 +24,19 @@ class AgentSettings:
     voicemail_path: str
     timezone: str
     token: str
+    asterisk_recordings_path: str = "/var/spool/asterisk/monitor"
+    freeswitch_recordings_path: str = ""
+    yeastar_base_url: str = ""
+    yeastar_client_id: str = ""
+    yeastar_client_secret: str = ""
+    yeastar_api_version: str = "v1.0"
+    yeastar_verify_tls: bool = True
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
-        mode = os.getenv("PBXPULSE_AGENT_MODE", "").strip().lower()
+        mode = os.getenv("PBXSENSE_AGENT_MODE", "").strip().lower()
         pbx_type = _normalize_pbx_type(
-            os.getenv("PBXPULSE_PBX_TYPE", mode or "asterisk")
+            os.getenv("PBXSENSE_PBX_TYPE", mode or "asterisk")
         )
         return cls(
             mode=mode or ("ami" if pbx_type == "asterisk" else pbx_type),
@@ -44,16 +51,16 @@ class AgentSettings:
             freeswitch_cdr_json_path=os.getenv("FREESWITCH_CDR_JSON_PATH", ""),
             freeswitch_voicemail_path=os.getenv("FREESWITCH_VOICEMAIL_PATH", ""),
             display_name=os.getenv(
-                "PBXPULSE_DISPLAY_NAME",
+                "PBXSENSE_DISPLAY_NAME",
                 _default_display_name(pbx_type),
             ),
             timeout_seconds=_env_float(
-                "PBXPULSE_CONNECT_TIMEOUT",
+                "PBXSENSE_CONNECT_TIMEOUT",
                 _env_float("ASTERISK_AMI_TIMEOUT", 3),
             ),
             extension_names=_parse_extension_names(
                 os.getenv(
-                    "PBXPULSE_EXTENSION_NAMES",
+                    "PBXSENSE_EXTENSION_NAMES",
                     "",
                 )
             ),
@@ -68,8 +75,18 @@ class AgentSettings:
                 "ASTERISK_VOICEMAIL_PATH",
                 "/var/spool/asterisk/voicemail",
             ),
-            timezone=os.getenv("PBXPULSE_TIMEZONE", os.getenv("TZ", "")).strip(),
-            token=os.getenv("PBXPULSE_AGENT_TOKEN", "").strip(),
+            timezone=os.getenv("PBXSENSE_TIMEZONE", os.getenv("TZ", "")).strip(),
+            token=os.getenv("PBXSENSE_AGENT_TOKEN", "").strip(),
+            asterisk_recordings_path=os.getenv(
+                "ASTERISK_RECORDINGS_PATH",
+                "/var/spool/asterisk/monitor",
+            ),
+            freeswitch_recordings_path=os.getenv("FREESWITCH_RECORDINGS_PATH", ""),
+            yeastar_base_url=os.getenv("YEASTAR_BASE_URL", "").strip().rstrip("/"),
+            yeastar_client_id=os.getenv("YEASTAR_CLIENT_ID", "").strip(),
+            yeastar_client_secret=os.getenv("YEASTAR_CLIENT_SECRET", "").strip(),
+            yeastar_api_version=os.getenv("YEASTAR_API_VERSION", "v1.0").strip() or "v1.0",
+            yeastar_verify_tls=_env_bool("YEASTAR_VERIFY_TLS", True),
         )
 
 
@@ -98,6 +115,9 @@ def _normalize_pbx_type(raw: str) -> str:
         "fs": "freeswitch",
         "freeswitch": "freeswitch",
         "fusionpbx": "freeswitch",
+        "yeastar": "yeastar",
+        "yeastarpseries": "yeastar",
+        "pseries": "yeastar",
         "mock": "mock",
     }.get(normalized, normalized or "asterisk")
 
@@ -106,6 +126,7 @@ def _default_display_name(pbx_type: str) -> str:
     return {
         "asterisk": "Asterisk",
         "freeswitch": "FreeSWITCH",
+        "yeastar": "Yeastar P-Series",
         "mock": "Mock PBX",
     }.get(pbx_type, "PBX")
 
@@ -122,3 +143,10 @@ def _env_float(key: str, default: float) -> float:
         return float(os.getenv(key, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
