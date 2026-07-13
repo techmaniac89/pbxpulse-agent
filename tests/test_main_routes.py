@@ -24,13 +24,27 @@ class MainRouteStructureTest(unittest.TestCase):
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 
         self.assertIn('id="copy-pairing-text"', source)
+        self.assertIn('id="copy-feedback"', source)
         self.assertIn("navigator.clipboard.writeText", source)
+        self.assertIn("copyFeedback.classList.add('visible')", source)
 
     def test_empty_paired_app_states_use_the_neutral_gold_card(self) -> None:
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 
         self.assertGreaterEqual(source.count('class="status empty"'), 2)
         self.assertIn(".status.empty", source)
+
+    def test_home_snapshot_exposes_relay_identity_for_live_recreation_detection(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn('payload["connection"]["pushRelayAgentId"]', source)
+
+    def test_paired_app_card_uses_customer_facing_device_details(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn('app_version.split("+", 1)[0]', source)
+        self.assertIn("model.casefold() != name.strip().casefold()", source)
+        self.assertNotIn("Push registration details for this Agent only.", source)
 
 
 if __name__ == "__main__":

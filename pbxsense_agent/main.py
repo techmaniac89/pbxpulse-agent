@@ -309,6 +309,7 @@ def _page(*, title: str, body: str) -> str:
             margin-top: 18px;
           }}
           .copy-button {{
+            position: relative;
             display: grid;
             place-items: center;
             padding: 0;
@@ -320,6 +321,37 @@ def _page(*, title: str, body: str) -> str:
           }}
           .copy-button:hover {{ background: #3a3026; }}
           .copy-button svg {{ width: 19px; height: 19px; }}
+          .copy-feedback {{
+            position: absolute;
+            right: -2px;
+            bottom: calc(100% + 10px);
+            padding: 7px 10px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #30281f;
+            color: var(--ink);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+            font-size: 12px;
+            font-weight: 750;
+            line-height: 1;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(4px) scale(0.96);
+            transition: opacity 150ms ease, transform 150ms ease;
+          }}
+          .copy-feedback::after {{
+            content: "";
+            position: absolute;
+            top: 100%;
+            right: 14px;
+            border: 6px solid transparent;
+            border-top-color: #30281f;
+          }}
+          .copy-feedback.visible {{
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }}
           .qr {{
             width: min(280px, 100%);
             margin-top: 18px;
@@ -472,6 +504,7 @@ def pair(request: Request):
                   <rect x="8" y="8" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
                   <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
+                <span id="copy-feedback" class="copy-feedback" role="status" aria-live="polite">Copied</span>
               </button>
             </div>
             <div class="actions">
@@ -480,6 +513,8 @@ def pair(request: Request):
             <script>
               (() => {{
                 const copyButton = document.getElementById('copy-pairing-text');
+                const copyFeedback = document.getElementById('copy-feedback');
+                let feedbackTimer;
                 copyButton.addEventListener('click', async () => {{
                   const value = document.getElementById('pairing-text').textContent;
                   try {{
@@ -496,7 +531,10 @@ def pair(request: Request):
                   }}
                   copyButton.title = 'Copied';
                   copyButton.setAttribute('aria-label', 'Pairing text copied');
-                  window.setTimeout(() => {{
+                  copyFeedback.classList.add('visible');
+                  window.clearTimeout(feedbackTimer);
+                  feedbackTimer = window.setTimeout(() => {{
+                    copyFeedback.classList.remove('visible');
                     copyButton.title = 'Copy pairing text';
                     copyButton.setAttribute('aria-label', 'Copy pairing text');
                   }}, 1600);
@@ -570,7 +608,7 @@ def paired_apps(request: Request):
         content = f"""
           <div class="status ok">
             <span class="dot"></span>
-            <span>{len(devices)} registered {'app' if len(devices) == 1 else 'apps'}<small>Push registration details for this Agent only.</small></span>
+            <span>{len(devices)} registered {'app' if len(devices) == 1 else 'apps'}<small>Push registration details.</small></span>
           </div>
           <div class="device-list">{''.join(_device_card(device) for device in devices if isinstance(device, dict))}</div>
         """
@@ -602,6 +640,10 @@ def _waiting_for_registered_app() -> str:
 
 def _device_card(device: dict[str, object]) -> str:
     name = str(device.get("deviceName") or device.get("deviceModel") or "PBXSense app")
+    model = str(device.get("deviceModel") or "").strip()
+    app_version = str(device.get("appVersion") or "").strip()
+    if app_version:
+        app_version = app_version.split("+", 1)[0]
     platform = str(device.get("platform") or "Unknown platform")
     os_version = str(device.get("osVersion") or "")
     subtitle = f"{platform.title()}{f' {os_version}' if os_version else ''}"
@@ -611,12 +653,13 @@ def _device_card(device: dict[str, object]) -> str:
     if device.get("activityEnabled", True):
         notifications.append("PBX activity")
     rows = {
-        "Model": str(device.get("deviceModel") or "Not reported"),
-        "App version": str(device.get("appVersion") or "Not reported"),
+        "App version": app_version or "Not reported",
         "Notifications": ", ".join(notifications) if notifications else "Disabled",
         "Last registered": str(device.get("updatedAt") or "Not reported"),
         "Registration ID": str(device.get("id") or "Unknown"),
     }
+    if model and model.casefold() != name.strip().casefold():
+        rows = {"Model": model, **rows}
     return f"""
       <article class="device-card">
         <h2>{escape(name)}</h2>
@@ -775,6 +818,9 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
             if signal.get("id") != "sig_tip_multiple_endpoints_unavailable"
         ]
     payload["connection"]["releaseChannel"] = AGENT_RELEASE_CHANNEL
+    payload["connection"]["pushRelayAgentId"] = str(
+        push_relay.status().get("agentId", "")
+    )
     return payload
 
 
