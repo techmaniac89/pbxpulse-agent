@@ -69,6 +69,11 @@ Pair the app:
 http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
 ```
 
+After the first app enrolls the Agent with the push relay, the same protected
+page changes to **Add another app**. Scan its QR on each additional phone. The
+Agent installation and relay identity remain shared, while every app registers
+its own FCM device and notification preferences.
+
 The token lives in:
 
 ```text

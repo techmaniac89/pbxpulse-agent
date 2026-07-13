@@ -576,7 +576,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.2.42-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.2.43-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -587,7 +587,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.2.42-beta`, attach the matching files from
+For a release tag such as `agent-v0.2.43-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

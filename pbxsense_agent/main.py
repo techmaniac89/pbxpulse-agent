@@ -405,16 +405,19 @@ def pair(request: Request):
         and relay_status.get("enrolled") is not True
         and "activation=" not in payload
     )
-    pairing_status = (
-        "Local pairing ready"
-        if relay_degraded
-        else "Pairing ready"
-    )
-    pairing_detail = (
-        "The push relay is temporarily unavailable. Local pairing still works; refresh before pairing to include closed-app push."
-        if relay_degraded
-        else "Scan this QR with PBXSense setup, or paste the pairing text."
-    )
+    if relay_status.get("enrolled") is True:
+        pairing_status = "Add another app"
+        pairing_detail = (
+            "Scan this QR on the additional phone. It will register its own push-notification device with this Agent."
+        )
+    elif relay_degraded:
+        pairing_status = "Local pairing ready"
+        pairing_detail = (
+            "The push relay is temporarily unavailable. Local pairing still works; refresh before pairing to include closed-app push."
+        )
+    else:
+        pairing_status = "Pairing ready"
+        pairing_detail = "Scan this QR with PBXSense setup, or paste the pairing text."
     return _page(
         title="Pair PBXSense",
         body=f"""

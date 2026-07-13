@@ -72,9 +72,25 @@ class AgentRelay:
         activation = self._state.get("activation")
         if isinstance(activation, dict) and activation.get("id") and activation.get("secret"):
             if _stored_timestamp(activation.get("expires_at")) > time.time() + 30:
-                return {"id": str(activation["id"]), "secret": str(activation["secret"])}
-            self._state.pop("activation", None)
-            self._save()
+                try:
+                    status = self._request(
+                        f"/v1/activations/{activation['id']}/status",
+                        {"activationSecret": activation["secret"]},
+                        signed=False,
+                    )
+                    if self._adopt_claimed_activation(status):
+                        return {}
+                    if status.get("expired"):
+                        self._state.pop("activation", None)
+                        self._save()
+                    else:
+                        return {"id": str(activation["id"]), "secret": str(activation["secret"])}
+                except OSError:
+                    # Keep the still-valid QR during a temporary relay outage.
+                    return {"id": str(activation["id"]), "secret": str(activation["secret"])}
+            else:
+                self._state.pop("activation", None)
+                self._save()
         private = self._private_key()
         public_key = _encode(private.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw,
@@ -200,16 +216,21 @@ class AgentRelay:
                 )
             except OSError:
                 return False
-            if response.get("claimed") and response.get("agentId"):
-                self._state["agent_id"] = str(response["agentId"])
-                self._state.pop("activation", None)
-                self._save()
+            if self._adopt_claimed_activation(response):
                 return True
             if response.get("expired"):
                 self._state.pop("activation", None)
                 self._save()
             return False
         return False
+
+    def _adopt_claimed_activation(self, response: dict[str, Any]) -> bool:
+        if not response.get("claimed") or not response.get("agentId"):
+            return False
+        self._state["agent_id"] = str(response["agentId"])
+        self._state.pop("activation", None)
+        self._save()
+        return True
 
     def _queue(self, kind: str, payload: dict[str, object]) -> None:
         outbox = self._state.setdefault("outbox", [])

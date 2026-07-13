@@ -41,7 +41,30 @@ class _ActivationRelay(AgentRelay):
         }
 
 
+class _ClaimedActivationRelay(_ActivationRelay):
+    def _request(self, path: str, payload: dict, *, signed: bool) -> dict:
+        self.requests.append((path, payload, signed))
+        if path.endswith("/status"):
+            return {"claimed": True, "agentId": "agent_claimed"}
+        return super()._request(path, payload, signed=signed)
+
+
 class RelayTest(unittest.TestCase):
+    def test_pair_page_refresh_adopts_claim_before_serving_second_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _ClaimedActivationRelay(str(Path(directory) / "identity.json"))
+            relay._state["activation"] = {
+                "id": "activation_claimed",
+                "secret": "secret_claimed",
+                "expires_at": 9999999999.0,
+            }
+
+            activation = relay.activation()
+
+            self.assertEqual(activation, {})
+            self.assertTrue(relay.configured)
+            self.assertEqual(relay.status()["agentId"], "agent_claimed")
+
     def test_expired_activation_is_replaced_in_pairing_qr(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = _ActivationRelay(str(Path(directory) / "identity.json"))
