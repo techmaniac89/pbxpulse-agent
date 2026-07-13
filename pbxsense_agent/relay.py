@@ -58,36 +58,45 @@ class AgentRelay:
     def activation(self) -> dict[str, str]:
         """Return a short-lived QR capability for the protected Agent page."""
         with self._lock:
-            if not self._url or self._state.get("agent_id"):
-                return {}
-            activation = self._state.get("activation")
-            if isinstance(activation, dict) and activation.get("id") and activation.get("secret"):
-                if float(activation.get("expires_at", 0)) > time.time() + 30:
-                    return {"id": str(activation["id"]), "secret": str(activation["secret"])}
-                self._state.pop("activation", None)
-                self._save()
-            private = self._private_key()
-            public_key = _encode(private.public_key().public_bytes(
-                serialization.Encoding.Raw, serialization.PublicFormat.Raw,
-            ))
             try:
-                response = self._request(
-                    "/v1/activations",
-                    {"publicKey": public_key, "displayName": self._display_name},
-                    signed=False,
-                )
-            except OSError:
+                return self._activation_locked()
+            except (OSError, TypeError, ValueError):
+                # Cloud enrollment is optional for local pairing. A stale
+                # identity file, read-only volume, missing crypto package, or
+                # temporary relay failure must never turn /pair into HTTP 500.
                 return {}
-            activation = {
-                "id": str(response.get("activationId", "")),
-                "secret": str(response.get("activationSecret", "")),
-                "expires_at": _iso_timestamp(str(response.get("expiresAt", ""))),
-            }
-            if not activation["id"] or not activation["secret"]:
-                return {}
-            self._state["activation"] = activation
+
+    def _activation_locked(self) -> dict[str, str]:
+        if not self._url or self._state.get("agent_id"):
+            return {}
+        activation = self._state.get("activation")
+        if isinstance(activation, dict) and activation.get("id") and activation.get("secret"):
+            if _stored_timestamp(activation.get("expires_at")) > time.time() + 30:
+                return {"id": str(activation["id"]), "secret": str(activation["secret"])}
+            self._state.pop("activation", None)
             self._save()
-            return {"id": str(activation["id"]), "secret": str(activation["secret"])}
+        private = self._private_key()
+        public_key = _encode(private.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw,
+        ))
+        try:
+            response = self._request(
+                "/v1/activations",
+                {"publicKey": public_key, "displayName": self._display_name},
+                signed=False,
+            )
+        except OSError:
+            return {}
+        activation = {
+            "id": str(response.get("activationId", "")),
+            "secret": str(response.get("activationSecret", "")),
+            "expires_at": _iso_timestamp(str(response.get("expiresAt", ""))),
+        }
+        if not activation["id"] or not activation["secret"]:
+            return {}
+        self._state["activation"] = activation
+        self._save()
+        return {"id": str(activation["id"]), "secret": str(activation["secret"])}
 
     def register_device(self, *, fcm_token: str, meaningful: bool, activity: bool) -> dict[str, object]:
         if not fcm_token.strip():
@@ -320,5 +329,12 @@ def _iso_timestamp(value: str) -> float:
         from datetime import datetime
 
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stored_timestamp(value: object) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return 0.0

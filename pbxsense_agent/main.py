@@ -399,14 +399,30 @@ def pair(request: Request):
     _require_token(request)
     payload = _pairing_payload(request)
     qr_svg = _qr_svg(payload)
+    relay_status = push_relay.status()
+    relay_degraded = (
+        relay_status.get("configured") is True
+        and relay_status.get("enrolled") is not True
+        and "activation=" not in payload
+    )
+    pairing_status = (
+        "Local pairing ready"
+        if relay_degraded
+        else "Pairing ready"
+    )
+    pairing_detail = (
+        "The push relay is temporarily unavailable. Local pairing still works; refresh before pairing to include closed-app push."
+        if relay_degraded
+        else "Scan this QR with PBXSense setup, or paste the pairing text."
+    )
     return _page(
         title="Pair PBXSense",
         body=f"""
           <section class="hero-card">
             {_brand_html()}
-            <div class="status ok">
+            <div class="status {'attention' if relay_degraded else 'ok'}">
               <span class="dot"></span>
-              <span>Pairing ready<small>Scan this QR with PBXSense setup, or paste the pairing text.</small></span>
+              <span>{pairing_status}<small>{pairing_detail}</small></span>
             </div>
             <div class="qr">{qr_svg}</div>
             <div class="pairing-code">{escape(payload)}</div>
@@ -835,7 +851,12 @@ def _pairing_payload(request: Request) -> str:
     query = {"agent": agent_url}
     if settings.token:
         query["token"] = settings.token
-    activation = push_relay.activation()
+    try:
+        activation = push_relay.activation()
+    except Exception:
+        # Relay enrollment enriches the QR with cloud push support, but local
+        # pairing must remain available if optional relay state is unhealthy.
+        activation = {}
     if activation:
         query["relay"] = settings.relay_url
         query["activation"] = activation["id"]

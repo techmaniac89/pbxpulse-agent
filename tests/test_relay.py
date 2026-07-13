@@ -57,6 +57,20 @@ class RelayTest(unittest.TestCase):
             self.assertEqual(activation, {"id": "activation_new", "secret": "secret_new"})
             self.assertEqual(relay.requests[0][0], "/v1/activations")
 
+    def test_corrupt_activation_expiry_does_not_break_pairing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _ActivationRelay(str(Path(directory) / "identity.json"))
+            relay._state["activation"] = {
+                "id": "activation_old",
+                "secret": "secret_old",
+                "expires_at": "not-a-timestamp",
+            }
+
+            activation = relay.activation()
+
+            self.assertEqual(activation, {"id": "activation_new", "secret": "secret_new"})
+            self.assertEqual(relay.requests[0][0], "/v1/activations")
+
     def test_relay_status_expiry_removes_stale_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = _ActivationRelay(str(Path(directory) / "identity.json"))

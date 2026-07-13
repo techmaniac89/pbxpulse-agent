@@ -123,6 +123,12 @@ For Linux service installs, the token is in:
 /etc/pbxsense-agent.env
 ```
 
+If the pairing page says **Local pairing ready**, the Agent deliberately fell
+back to a local-only QR because cloud relay activation was unavailable. The page
+must not return HTTP 500 for this condition. Check relay connectivity and write
+access to `PBXSENSE_RELAY_IDENTITY_PATH`, then refresh the page before pairing
+when closed-app push notifications are required.
+
 ## Missing History Or Voicemail
 
 If live calls work but history, tips, or voicemail evidence is missing:
