@@ -26,6 +26,12 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn('id="copy-pairing-text"', source)
         self.assertIn("navigator.clipboard.writeText", source)
 
+    def test_empty_paired_app_states_use_the_neutral_gold_card(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(source.count('class="status empty"'), 2)
+        self.assertIn(".status.empty", source)
+
 
 if __name__ == "__main__":
     unittest.main()

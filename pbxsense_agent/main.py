@@ -245,6 +245,7 @@ def _page(*, title: str, body: str) -> str:
             font-weight: 750;
           }}
           .status.ok {{ background: rgba(142, 180, 134, 0.17); color: #b7d6af; }}
+          .status.empty {{ background: rgba(216, 174, 98, 0.17); color: #efd08d; }}
           .status.attention {{ background: rgba(240, 154, 131, 0.17); color: #ffb29f; }}
           .dot {{
             width: 14px;
@@ -544,7 +545,7 @@ def paired_apps(request: Request):
         content = _waiting_for_registered_app()
     elif result.get("state") == "notEnrolled":
         content = """
-          <div class="status ok">
+          <div class="status empty">
             <span class="dot"></span>
             <span>No registered apps<small>Pair your first app. If this Agent was rebuilt and apps are missing, restore its previous relay identity or pair them again.</small></span>
           </div>
@@ -560,7 +561,7 @@ def paired_apps(request: Request):
         content = _waiting_for_registered_app()
     elif not isinstance(devices, list) or not devices:
         content = """
-          <div class="status ok">
+          <div class="status empty">
             <span class="dot"></span>
             <span>No registered apps<small>Pair an app to register it for push notifications.</small></span>
           </div>
