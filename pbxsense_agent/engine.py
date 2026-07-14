@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta
+from math import ceil
 import re
 from typing import Any
 
@@ -11,6 +12,7 @@ from .history import CdrCall, SecurityEvent, VoicemailMessage, interpreted_call_
 def build_engine_signals(
     *,
     endpoints: list[Any],
+    queues: list[Any],
     recent_calls: list[CdrCall],
     voicemails: list[VoicemailMessage],
     security_events: list[SecurityEvent],
@@ -23,6 +25,8 @@ def build_engine_signals(
     )
     signals.extend(_call_mix_insights(recent_calls, voicemails, now))
     signals.extend(_rhythm_insights(recent_calls, now))
+    signals.extend(_operational_insights(endpoints, queues, recent_calls, extension_names, now))
+    signals.extend(_operational_moments(queues, recent_calls, voicemails, now))
     signals.extend(_missed_rate_recommendations(recent_calls, now))
     signals.extend(_endpoint_recommendations(endpoints, extension_names))
     signals.extend(_security_signals(recent_calls, security_events, now))
@@ -501,6 +505,252 @@ def _security_signals(
         )
 
     return signals
+
+
+def _signal(category: str, identifier: str, kind: str, title: str, body: str,
+            why: list[str], technical: dict, time_label: str = "Today") -> dict:
+    return {"id": f"sig_{category}_{identifier}", "kind": kind, "category": category,
+            "importance": "feed", "state": "active", "title": title, "body": body,
+            "timeLabel": time_label, "actionLabel": None, "why": why,
+            "technical": {key: str(value) for key, value in technical.items()}}
+
+
+def _operational_insights(endpoints: list[Any], queues: list[Any], calls: list[CdrCall],
+                          extension_names: dict[str, str], now: datetime) -> list[dict]:
+    signals: list[dict] = []
+    waiting = sum(max(0, queue.waiting_callers) for queue in queues)
+    available = sum(max(0, queue.available_members) for queue in queues)
+    if waiting > available:
+        signals.append(_signal("insight", "queue_demand_agents", "queue_demand_vs_agents",
+            f"{waiting} callers are waiting for {available} available queue agents.",
+            "Queue demand is currently higher than available coverage.",
+            [f"The PBX reports {waiting} waiting caller(s) and {available} available agent(s)."],
+            {"waiting_callers": waiting, "available_agents": available}, "Now"))
+
+    dated = _dated_calls(calls)
+    queue_misses = [call for call in dated if interpreted_call_kind(call) == "missed" and _is_queue_call(call)]
+    periods: Counter[tuple[object, int]] = Counter((call.started_at.date(), call.started_at.hour) for call in queue_misses)
+    hours: Counter[int] = Counter(hour for (_, hour), count in periods.items() if count >= 2)
+    if hours:
+        hour, days = hours.most_common(1)[0]
+        if days >= 2:
+            signals.append(_signal("insight", "repeated_abandonment", "repeated_abandonment_period",
+                f"Queue abandonments repeatedly cluster around {hour:02d}:00.",
+                "The same pressure period appears on multiple days.",
+                [f"At least two abandoned queue calls appeared in that hour on {days} days."],
+                {"hour": f"{hour:02d}:00", "matching_days": days}, "Recent history"))
+
+    after_hours = [call for call in dated if call.started_at.hour < 8 or call.started_at.hour >= 18]
+    if len(dated) >= 20 and len(after_hours) >= 5 and len(after_hours) / len(dated) >= .2:
+        signals.append(_signal("insight", "after_hours_calls", "after_hours_call_pattern",
+            "A meaningful share of calls arrives after hours.",
+            "Coverage or routing outside the working day may deserve review.",
+            [f"{len(after_hours)} of {len(dated)} visible calls were before 08:00 or after 18:00."],
+            {"after_hours_calls": len(after_hours), "visible_calls": len(dated)}, "Recent history"))
+
+    endpoint_ids = {endpoint.extension for endpoint in endpoints if endpoint.role != "trunk"}
+    failed = Counter(call.destination for call in dated if call.destination in endpoint_ids and interpreted_call_kind(call) == "missed")
+    if failed:
+        extension, count = failed.most_common(1)[0]
+        days = {call.started_at.date() for call in dated if call.destination == extension and interpreted_call_kind(call) == "missed"}
+        if count >= 4 and len(days) >= 2:
+            name = _extension_name(extension, extension_names, "")
+            signals.append(_signal("insight", f"extension_availability_{_safe_id(extension)}", "recurring_extension_availability",
+                f"{name} has recurring availability pressure.",
+                "Missed attempts to this extension recur across multiple days.",
+                [f"PBXSense found {count} missed attempts across {len(days)} days."],
+                {"extension": extension, "missed_attempts": count, "days": len(days)}, "Recent history"))
+
+    contexts = Counter(
+        call.context for call in dated
+        if call.context
+        and interpreted_call_kind(call) == "missed"
+        and _trunk_name_for_context(call.context, endpoints, extension_names) is None
+    )
+    total_missed = sum(contexts.values())
+    if total_missed >= 5:
+        context, count = contexts.most_common(1)[0]
+        if count / total_missed >= .6:
+            signals.append(_signal("insight", f"department_missed_{_safe_id(context)}", "department_missed_call_load",
+                f"{context} carries most of the visible missed-call load.",
+                "One PBX call context accounts for a disproportionate share.",
+                [f"{count} of {total_missed} missed calls used this PBX context."],
+                {"department_context": context, "missed_calls": count, "total_missed_calls": total_missed}, "Recent history"))
+
+    today_durations = [c.duration_seconds for c in dated if c.started_at.date() == now.date() and interpreted_call_kind(c) == "answered"]
+    prior_durations = [c.duration_seconds for c in dated if c.started_at.date() != now.date() and c.started_at.weekday() == now.weekday() and interpreted_call_kind(c) == "answered"]
+    if len(today_durations) >= 5 and len(prior_durations) >= 10:
+        today_avg, prior_avg = sum(today_durations) / len(today_durations), sum(prior_durations) / len(prior_durations)
+        if prior_avg >= 10 and (today_avg >= prior_avg * 1.4 or today_avg <= prior_avg * .6):
+            direction = "longer" if today_avg > prior_avg else "shorter"
+            signals.append(_signal("insight", "weekday_duration_change", "weekday_call_duration_change",
+                f"Answered calls are {direction} than on matching weekdays.",
+                "PBXSense compared average answered-call duration.",
+                [f"Today averages {round(today_avg)}s versus {round(prior_avg)}s on matching weekdays."],
+                {"today_average_seconds": round(today_avg), "weekday_average_seconds": round(prior_avg)}))
+
+    trunks = Counter(filter(None, (_trunk_display_for_call(call, endpoints, extension_names) for call in dated)))
+    if sum(trunks.values()) >= 10 and len(trunks) >= 2:
+        trunk, count = trunks.most_common(1)[0]
+        share = count / sum(trunks.values())
+        if share >= .8:
+            signals.append(_signal("insight", "trunk_distribution", "trunk_usage_distribution",
+                f"Most visible calls rely on trunk {trunk}.",
+                "Traffic is concentrated enough that failover readiness matters.",
+                [f"This trunk carried {round(share * 100)}% of calls with identifiable trunks."],
+                {"primary_trunk": trunk, "share": f"{round(share * 100)}%", "identified_calls": sum(trunks.values())}, "Recent history"))
+    return signals
+
+
+def _operational_moments(queues: list[Any], calls: list[CdrCall], voicemails: list[VoicemailMessage], now: datetime) -> list[dict]:
+    signals: list[dict] = []
+    answered = sorted((c for c in _dated_calls(calls) if c.started_at.date() == now.date() and interpreted_call_kind(c) == "answered"), key=lambda c: c.started_at)
+    if answered:
+        first = answered[0]
+        signals.append(_signal("moment", "first_answered_call", "first_answered_call_of_day",
+            "The first call of the day was answered.", "The day is under way with a connected caller.",
+            [f"The first visible answered call began at {first.started_at:%H:%M}."], {"answered_at": f"{first.started_at:%H:%M}"}))
+    signals.extend(_adaptive_volume_moments(calls, now))
+    if queues and now.hour >= 17 and all(q.waiting_callers == 0 and q.longest_wait_seconds <= 60 for q in queues):
+        signals.append(_signal("moment", "queues_met_target", "queues_finished_within_target",
+            "All monitored queues finished within target.", "No callers remain waiting and observed waits stayed within 60 seconds.",
+            [f"PBXSense checked {len(queues)} monitored queue(s) near the end of the day."],
+            {"queues": len(queues), "target_seconds": 60}))
+    today_calls = [c for c in _dated_calls(calls) if c.started_at.date() == now.date()]
+    today_missed = _missed_count(today_calls)
+    if now.hour >= 17 and today_calls and today_missed == 0:
+        signals.append(_signal("moment", "day_without_missed_calls", "full_day_without_missed_calls",
+            "The working day finished without a missed call.",
+            "Every visible call avoided a missed-call outcome.",
+            [f"PBXSense checked {len(today_calls)} call(s); a no-call day never qualifies."],
+            {"visible_calls": len(today_calls), "missed_calls": 0}))
+
+    calls_by_date: dict[object, list[CdrCall]] = {}
+    for call in _dated_calls(calls):
+        calls_by_date.setdefault(call.started_at.date(), []).append(call)
+    clean_streak, clean_day = 0, now.date()
+    # Today counts only after the working day; earlier in the day start with yesterday.
+    if now.hour < 17:
+        clean_day -= timedelta(days=1)
+    while calls_by_date.get(clean_day) and _missed_count(calls_by_date[clean_day]) == 0:
+        clean_streak, clean_day = clean_streak + 1, clean_day - timedelta(days=1)
+    if clean_streak >= 2:
+        signals.append(_signal("moment", "clean_operating_streak", "clean_operating_day_streak",
+            f"A {clean_streak}-day clean operating streak is growing.",
+            "Each counted day had real call activity and no missed calls.",
+            ["No-call days and incomplete working days are excluded."], {"streak_days": clean_streak}))
+    activity_dates = {c.started_at.date() for c in _dated_calls(calls)}
+    voicemail_dates = {v.created_at.date() for v in voicemails if v.created_at is not None}
+    streak, day = 0, now.date()
+    while day in activity_dates and day not in voicemail_dates:
+        streak, day = streak + 1, day - timedelta(days=1)
+    if streak >= 2:
+        signals.append(_signal("moment", "voicemail_free_streak", "voicemail_free_service_streak",
+            f"A {streak}-day voicemail-free service streak is growing.",
+            "Calls were visible without a new voicemail on each counted day.",
+            ["The streak counts consecutive days represented in local call history."], {"streak_days": streak}))
+    return signals
+
+
+def _adaptive_volume_moments(calls: list[CdrCall], now: datetime) -> list[dict]:
+    """Recognize volume relative to this PBX, never a universal call count."""
+    answered = [call for call in _dated_calls(calls) if interpreted_call_kind(call) == "answered"]
+    today = now.date()
+    signals: list[dict] = []
+
+    daily_counts = Counter(call.started_at.date() for call in answered if call.started_at.date() != today)
+    current_daily = sum(call.started_at.date() == today for call in answered)
+    if len(daily_counts) >= 3:
+        signals.extend(_average_volume_moment("daily", current_daily, list(daily_counts.values()), len(daily_counts)))
+
+    current_week = today.isocalendar()[:2]
+    weekly_calls: Counter[tuple[int, int]] = Counter()
+    weekly_days: dict[tuple[int, int], set[object]] = {}
+    current_week_count = 0
+    for call in answered:
+        week = call.started_at.date().isocalendar()[:2]
+        if week == current_week:
+            current_week_count += 1
+        else:
+            weekly_calls[week] += 1
+            weekly_days.setdefault(week, set()).add(call.started_at.date())
+    complete_weeks = [count for week, count in weekly_calls.items() if len(weekly_days.get(week, set())) >= 4]
+    if len(complete_weeks) >= 2:
+        signals.extend(_average_volume_moment("weekly", current_week_count, complete_weeks, len(complete_weeks)))
+
+    current_month = (today.year, today.month)
+    monthly_calls: Counter[tuple[int, int]] = Counter()
+    monthly_days: dict[tuple[int, int], set[object]] = {}
+    current_month_count = 0
+    for call in answered:
+        month = (call.started_at.year, call.started_at.month)
+        if month == current_month:
+            current_month_count += 1
+        else:
+            monthly_calls[month] += 1
+            monthly_days.setdefault(month, set()).add(call.started_at.date())
+    complete_months = [count for month, count in monthly_calls.items() if len(monthly_days.get(month, set())) >= 15]
+    if len(complete_months) >= 2:
+        signals.extend(_average_volume_moment("monthly", current_month_count, complete_months, len(complete_months)))
+    return signals
+
+
+def _average_volume_moment(period: str, current: int, baselines: list[int], samples: int) -> list[dict]:
+    average = sum(baselines) / len(baselines)
+    target = max(1, ceil(average))
+    if current < target:
+        return []
+    label = {"daily": "day", "weekly": "week", "monthly": "month"}[period]
+    return [_signal("moment", f"adaptive_{period}_volume", "adaptive_call_volume_milestone",
+        f"This {label} reached the PBX's usual call volume.",
+        f"The team answered {current} calls against a learned {period} average of about {average:.1f}.",
+        [f"The target adapts to this PBX using {samples} completed {label}(s)."],
+        {"period": period, "answered_calls": current, "average_answered_calls": f"{average:.1f}",
+         "adaptive_target": target, "baseline_periods": samples},
+        {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period])]
+
+
+def _is_queue_call(call: CdrCall) -> bool:
+    return "queue" in " ".join((call.context, call.last_app, call.last_data)).lower()
+
+
+def _trunk_from_call(call: CdrCall) -> str:
+    for value in (call.channel, call.destination_channel):
+        match = re.search(r"(?:PJSIP|SIP|IAX2)/([^/-]+)", value, re.IGNORECASE)
+        if match and not match.group(1).isdigit():
+            return match.group(1)
+    return ""
+
+
+def _trunk_display_for_call(call: CdrCall, endpoints: list[Any], extension_names: dict[str, str]) -> str:
+    trunk = _trunk_from_call(call)
+    if not trunk:
+        context_name = _trunk_name_for_context(call.context, endpoints, extension_names)
+        return context_name or ""
+    for endpoint in endpoints:
+        if endpoint.role == "trunk" and endpoint.extension.lower() == trunk.lower():
+            return _extension_name(endpoint.extension, extension_names, endpoint.label)
+    return trunk
+
+
+def _trunk_name_for_context(context: str, endpoints: list[Any], extension_names: dict[str, str]) -> str | None:
+    """Resolve dialplan contexts like from-Cosmote without calling them departments."""
+    normalized = re.sub(r"[^a-z0-9]", "", context.lower())
+    if not normalized.startswith("from"):
+        return None
+    suffix = normalized[4:]
+    if not suffix or suffix == "internal":
+        return None
+    for endpoint in endpoints:
+        if endpoint.role != "trunk":
+            continue
+        candidates = (endpoint.extension, endpoint.label, extension_names.get(endpoint.extension, ""))
+        if any(
+            suffix == candidate or (len(suffix) >= 3 and suffix in candidate)
+            for candidate in (re.sub(r"[^a-z0-9]", "", value.lower()) for value in candidates if value)
+        ):
+            return _extension_name(endpoint.extension, extension_names, endpoint.label)
+    return None
 
 
 def _history_window(recent_calls: list[CdrCall], now: datetime) -> str:

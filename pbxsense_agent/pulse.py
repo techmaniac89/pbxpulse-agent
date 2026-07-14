@@ -68,6 +68,9 @@ class _MomentState:
     queue_waiting: tuple[tuple[str, int], ...]
     unavailable_extensions: frozenset[str]
     voicemail_keys: frozenset[str]
+    queue_abandonment_keys: frozenset[str]
+    unavailable_trunks: frozenset[str]
+    active_trunks: frozenset[str]
 
 
 class ActivityTracker:
@@ -78,6 +81,8 @@ class ActivityTracker:
         self._previous: _MomentState | None = None
         self._events: list[dict] = []
         self._reported_phone_recoveries: dict[str, datetime] = {}
+        self._busy_queues: dict[str, frozenset[str]] = {}
+        self._recovered_trunks_waiting_for_call: set[str] = set()
         self._lock = Lock()
 
     def observe(self, snapshot: AmiSnapshot, now: datetime) -> list[dict]:
@@ -119,6 +124,12 @@ class ActivityTracker:
     ) -> None:
         previous_queues = dict(previous.queue_waiting)
         current_queues = dict(current.queue_waiting)
+        for queue, waiting in previous_queues.items():
+            if waiting >= 2:
+                self._busy_queues.setdefault(queue, previous.queue_abandonment_keys)
+        for queue, waiting in current_queues.items():
+            if waiting >= 2:
+                self._busy_queues.setdefault(queue, current.queue_abandonment_keys)
         for queue, previous_waiting in previous_queues.items():
             if previous_waiting <= 0 or current_queues.get(queue, 0) != 0:
                 continue
@@ -134,6 +145,32 @@ class ActivityTracker:
                 },
                 scope=queue,
             )
+            abandonment_baseline = self._busy_queues.pop(queue, None)
+            if abandonment_baseline is not None and current.queue_abandonment_keys == abandonment_baseline:
+                self._add_event(
+                    now,
+                    kind="busy_period_completed_without_abandonment",
+                    title=f"{queue} cleared a busy period without an abandonment.",
+                    body="Waiting callers were cleared without a new abandoned queue call.",
+                    why="PBXSense observed queue pressure reach at least two callers, then return to zero.",
+                    technical={"queue": queue, "peak_confirmed_waiting": "2+"},
+                    scope=queue,
+                    category="moment",
+                )
+
+        recovered_trunks = previous.unavailable_trunks - current.unavailable_trunks
+        self._recovered_trunks_waiting_for_call.update(recovered_trunks)
+        successful_recoveries = self._recovered_trunks_waiting_for_call & current.active_trunks
+        for trunk in sorted(successful_recoveries):
+            self._add_event(
+                now,
+                kind="trunk_recovery_successful_call",
+                title=f"Trunk {trunk} recovered and is carrying a call.",
+                body="The restored trunk has confirmed its recovery with live traffic.",
+                why="The trunk changed from unavailable to reachable and later appeared on an active call.",
+                technical={"trunk": trunk}, scope=trunk, category="moment",
+            )
+        self._recovered_trunks_waiting_for_call.difference_update(successful_recoveries)
 
         recovered = previous.unavailable_extensions - current.unavailable_extensions
         new_recoveries = {
@@ -189,6 +226,7 @@ class ActivityTracker:
         why: str,
         technical: dict[str, str],
         scope: str = "",
+        category: str = "activity",
     ) -> None:
         suffix = _safe_id(scope) if scope else "office"
         self._events.append(
@@ -200,6 +238,7 @@ class ActivityTracker:
                 "why": why,
                 "technical": technical,
                 "observed_at": observed_at,
+                "category": category,
             }
         )
 
@@ -320,11 +359,31 @@ def _moment_state(snapshot: AmiSnapshot) -> _MomentState:
         for message in snapshot.voicemails
         if message.created_at is not None
     )
+    queue_abandonment_keys = frozenset(
+        f"{call.source}|{call.started_at.isoformat()}"
+        for call in snapshot.recent_calls
+        if call.started_at is not None
+        and interpreted_call_kind(call) == "missed"
+        and "queue" in " ".join((call.context, call.last_app, call.last_data)).lower()
+    )
+    unavailable_trunks = frozenset(
+        endpoint.extension for endpoint in snapshot.endpoints
+        if endpoint.role == "trunk" and _endpoint_unavailable(endpoint)
+    )
+    active_trunks = frozenset(
+        channel.endpoint or channel.extension for channel in snapshot.channels
+        if any(endpoint.role == "trunk" and endpoint.extension == (channel.endpoint or channel.extension)
+               for endpoint in snapshot.endpoints)
+        and _is_active_channel(channel)
+    )
     return _MomentState(
         reachable=snapshot.reachable,
         queue_waiting=queue_waiting,
         unavailable_extensions=unavailable_extensions,
         voicemail_keys=voicemail_keys,
+        queue_abandonment_keys=queue_abandonment_keys,
+        unavailable_trunks=unavailable_trunks,
+        active_trunks=active_trunks,
     )
 
 
@@ -416,6 +475,7 @@ def build_home_payload(
     signals.extend(
         build_engine_signals(
             endpoints=snapshot.endpoints,
+            queues=snapshot.queues,
             recent_calls=snapshot.recent_calls,
             voicemails=snapshot.voicemails,
             security_events=snapshot.security_events,
@@ -839,7 +899,7 @@ def _activity_signals(
             {
                 "id": event["id"],
                 "kind": event["kind"],
-                "category": "activity",
+                "category": event.get("category", "activity"),
                 "importance": "feed",
                 "state": "active",
                 "title": event["title"],

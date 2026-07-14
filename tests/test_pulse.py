@@ -1235,7 +1235,7 @@ class PulseMappingTest(unittest.TestCase):
         self.assertEqual(payload["now"]["title"], "The office is quiet.")
         self.assertIn("Linphone missed Support.", [call["title"] for call in payload["calls"]])
 
-    def test_call_history_does_not_create_a_calculated_moment(self) -> None:
+    def test_call_history_creates_first_answered_call_moment(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
         recent_record = CdrCall(
             source="101",
@@ -1267,7 +1267,67 @@ class PulseMappingTest(unittest.TestCase):
         moments = [
             signal for signal in payload["signals"] if signal["category"] == "moment"
         ]
-        self.assertEqual(moments, [])
+        by_kind = {moment["kind"]: moment for moment in moments}
+        self.assertIn("first_answered_call_of_day", by_kind)
+        self.assertIn("full_day_without_missed_calls", by_kind)
+        self.assertEqual(by_kind["first_answered_call_of_day"]["technical"]["answered_at"], "18:00")
+
+    def test_queue_pressure_insight_and_end_of_day_moment_use_live_queue_evidence(self) -> None:
+        now = datetime(2026, 6, 26, 18, tzinfo=ZoneInfo("Europe/Athens"))
+        pressured = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", queues=[
+                AmiQueue(name="support", waiting_callers=3, available_members=1),
+            ]), display_name="Office PBX", extension_names={}, now=now,
+        )
+        self.assertIn("queue_demand_vs_agents", [s["kind"] for s in pressured["signals"]])
+
+        clear = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", queues=[
+                AmiQueue(name="support", waiting_callers=0, longest_wait_seconds=42),
+            ]), display_name="Office PBX", extension_names={}, now=now,
+        )
+        self.assertIn("queues_finished_within_target", [s["kind"] for s in clear["signals"]])
+
+    def test_call_volume_milestone_adapts_to_this_pbx_daily_average(self) -> None:
+        now = datetime(2026, 6, 26, 12, tzinfo=ZoneInfo("Europe/Athens"))
+        calls = []
+        for days_ago in (1, 2, 3):
+            for index in range(4):
+                calls.append(CdrCall(
+                    source=str(100 + index), destination="200", disposition="ANSWERED",
+                    started_at=(now - timedelta(days=days_ago)).replace(tzinfo=None, hour=9 + index),
+                    duration_seconds=30,
+                ))
+        for index in range(4):
+            calls.append(CdrCall(
+                source=str(110 + index), destination="200", disposition="ANSWERED",
+                started_at=now.replace(tzinfo=None, hour=8 + index), duration_seconds=30,
+            ))
+
+        payload = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", recent_calls=calls),
+            display_name="Office PBX", extension_names={}, now=now,
+        )
+        milestone = next(s for s in payload["signals"] if s["kind"] == "adaptive_call_volume_milestone")
+        self.assertEqual(milestone["technical"]["period"], "daily")
+        self.assertEqual(milestone["technical"]["adaptive_target"], "4")
+        self.assertEqual(milestone["technical"]["baseline_periods"], "3")
+
+    def test_inbound_trunk_context_is_not_misclassified_as_a_department(self) -> None:
+        now = datetime(2026, 6, 26, 12, tzinfo=ZoneInfo("Europe/Athens"))
+        calls = [CdrCall(
+            source=str(2100000000 + index), destination="100", disposition="NO ANSWER",
+            started_at=(now - timedelta(minutes=index)).replace(tzinfo=None),
+            duration_seconds=10, context="from-Cosmote",
+        ) for index in range(6)]
+        payload = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", recent_calls=calls,
+                endpoints=[AmiEndpoint(extension="cosmote", device_state="Reachable",
+                    label="Cosmote SIP trunk", role="trunk")]),
+            display_name="Office PBX", extension_names={}, now=now,
+        )
+        self.assertNotIn("department_missed_call_load", [s["kind"] for s in payload["signals"]])
+        self.assertNotIn("from-Cosmote carries most", " ".join(s["title"] for s in payload["signals"]))
 
     def test_activity_tracker_emits_real_pbx_transitions(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
@@ -1304,6 +1364,7 @@ class PulseMappingTest(unittest.TestCase):
             {
                 "pbx_queue_cleared_activity",
                 "pbx_phone_recovered_activity",
+                "busy_period_completed_without_abandonment",
             },
         )
         payload = build_home_payload(
@@ -1315,7 +1376,7 @@ class PulseMappingTest(unittest.TestCase):
         )
         self.assertEqual(
             {signal["kind"] for signal in payload["signals"] if signal["category"] == "activity"},
-            {event["kind"] for event in events},
+            {event["kind"] for event in events if event.get("category") == "activity"},
         )
 
     def test_activity_tracker_rearms_recovery_after_a_new_outage(self) -> None:
@@ -1358,7 +1419,7 @@ class PulseMappingTest(unittest.TestCase):
             now + timedelta(minutes=2),
         )
 
-        self.assertEqual(events, [])
+        self.assertFalse(any(event["kind"] == "pbx_phone_recovered_activity" for event in events))
         events = tracker.observe(
             AmiSnapshot(
                 reachable=True,
@@ -1370,7 +1431,7 @@ class PulseMappingTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            [event["kind"] for event in events],
+            [event["kind"] for event in events if event["kind"] == "pbx_phone_recovered_activity"],
             ["pbx_phone_recovered_activity"],
         )
 

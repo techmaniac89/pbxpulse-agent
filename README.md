@@ -5,7 +5,7 @@ It runs near the PBX, observes PBX state through the safest available connector,
 and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
-The current Agent release is `0.3.10-beta` on the **Breeze** channel.
+The current Agent release is `0.3.14-beta` on the **Breeze** channel.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
 Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, or a development mock connector.
@@ -17,6 +17,15 @@ out of the user-facing PBXSense experience.
 - Reads current PBX state from a supported connector.
 - Converts raw PBX observations into PBXSense Home data, Signals, Tips, and
   technical details.
+- Produces evidence-gated operational Insights for queue coverage, recurring
+  abandonment periods, after-hours traffic, extension availability, missed-call
+  concentration, weekday call duration, and trunk reliance. Moments recognize
+  the first answered call, queues finishing within target, and voicemail-free
+  service streaks when enough history is available. Additional milestones mark
+  adaptive daily, weekly, and monthly answered-call volume based on each PBX's
+  own completed-period averages, a real call day without misses, clean operating-day
+  streaks, busy queues cleared without abandonment, and a recovered trunk's
+  first successful call.
 - Reports extension presence in People, including available, on-call, busy,
   ringing, away, DND, and offline states when the connector can observe them.
 - Shows queue pressure when supported: Asterisk/Grandstream wait and member
@@ -578,7 +587,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.3.10-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.3.14-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -589,7 +598,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.3.10-beta`, attach the matching files from
+For a release tag such as `agent-v0.3.14-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 
