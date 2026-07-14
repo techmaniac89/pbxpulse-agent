@@ -561,21 +561,24 @@ def _operational_insights(endpoints: list[Any], queues: list[Any], calls: list[C
                 [f"PBXSense found {count} missed attempts across {len(days)} days."],
                 {"extension": extension, "missed_attempts": count, "days": len(days)}, "Recent history"))
 
-    contexts = Counter(
-        call.context for call in dated
-        if call.context
-        and interpreted_call_kind(call) == "missed"
-        and _trunk_name_for_context(call.context, endpoints, extension_names) is None
-    )
-    total_missed = sum(contexts.values())
-    if total_missed >= 5:
-        context, count = contexts.most_common(1)[0]
-        if count / total_missed >= .6:
-            signals.append(_signal("insight", f"department_missed_{_safe_id(context)}", "department_missed_call_load",
-                f"{context} carries most of the visible missed-call load.",
-                "One PBX call context accounts for a disproportionate share.",
-                [f"{count} of {total_missed} missed calls used this PBX context."],
-                {"department_context": context, "missed_calls": count, "total_missed_calls": total_missed}, "Recent history"))
+    configured_trunks = [endpoint for endpoint in endpoints if endpoint.role == "trunk"]
+    if len(configured_trunks) >= 2:
+        missed_by_trunk: Counter[str] = Counter()
+        for call in dated:
+            if interpreted_call_kind(call) != "missed":
+                continue
+            trunk_name = _trunk_name_for_context(call.context, endpoints, extension_names)
+            if trunk_name:
+                missed_by_trunk[_short_trunk_name(trunk_name)] += 1
+        total_trunk_missed = sum(missed_by_trunk.values())
+        if total_trunk_missed >= 5 and missed_by_trunk:
+            trunk_name, count = missed_by_trunk.most_common(1)[0]
+            if count / total_trunk_missed >= .6:
+                signals.append(_signal("insight", f"trunk_missed_{_safe_id(trunk_name)}", "trunk_missed_call_load",
+                    f"{trunk_name} carries most of the visible missed-call load.",
+                    "One of the configured SIP trunks accounts for a disproportionate share.",
+                    [f"{count} of {total_trunk_missed} missed inbound calls were associated with this trunk."],
+                    {"trunk": trunk_name, "missed_calls": count, "total_trunk_missed_calls": total_trunk_missed}, "Recent history"))
 
     today_durations = [c.duration_seconds for c in dated if c.started_at.date() == now.date() and interpreted_call_kind(c) == "answered"]
     prior_durations = [c.duration_seconds for c in dated if c.started_at.date() != now.date() and c.started_at.weekday() == now.weekday() and interpreted_call_kind(c) == "answered"]
@@ -751,6 +754,11 @@ def _trunk_name_for_context(context: str, endpoints: list[Any], extension_names:
         ):
             return _extension_name(endpoint.extension, extension_names, endpoint.label)
     return None
+
+
+def _short_trunk_name(name: str) -> str:
+    concise = re.sub(r"\s+(?:sip\s+)?trunk$", "", name, flags=re.IGNORECASE).strip()
+    return concise or name
 
 
 def _history_window(recent_calls: list[CdrCall], now: datetime) -> str:

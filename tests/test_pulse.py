@@ -1327,7 +1327,27 @@ class PulseMappingTest(unittest.TestCase):
             display_name="Office PBX", extension_names={}, now=now,
         )
         self.assertNotIn("department_missed_call_load", [s["kind"] for s in payload["signals"]])
+        self.assertNotIn("trunk_missed_call_load", [s["kind"] for s in payload["signals"]])
         self.assertNotIn("from-Cosmote carries most", " ".join(s["title"] for s in payload["signals"]))
+
+    def test_trunk_missed_load_uses_name_and_requires_multiple_trunks(self) -> None:
+        now = datetime(2026, 6, 26, 12, tzinfo=ZoneInfo("Europe/Athens"))
+        calls = [CdrCall(
+            source=str(2100000000 + index), destination="100", disposition="NO ANSWER",
+            started_at=(now - timedelta(minutes=index)).replace(tzinfo=None),
+            duration_seconds=10, context="from-Cosmote" if index < 5 else "from-Backup",
+        ) for index in range(6)]
+        payload = build_home_payload(
+            AmiSnapshot(reachable=True, agent_version="test", recent_calls=calls,
+                endpoints=[
+                    AmiEndpoint(extension="cosmote", device_state="Reachable", label="Cosmote SIP trunk", role="trunk"),
+                    AmiEndpoint(extension="backup", device_state="Reachable", label="Backup SIP trunk", role="trunk"),
+                ]),
+            display_name="Office PBX", extension_names={}, now=now,
+        )
+        signal = next(s for s in payload["signals"] if s["kind"] == "trunk_missed_call_load")
+        self.assertEqual(signal["title"], "Cosmote carries most of the visible missed-call load.")
+        self.assertEqual(signal["technical"]["trunk"], "Cosmote")
 
     def test_activity_tracker_emits_real_pbx_transitions(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
