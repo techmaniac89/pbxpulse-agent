@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .connectors import connector_for_settings
+from .diagnostics import ami_diagnostic_statuses
 from .history import (
     history_diagnostics,
     read_recent_cdr_calls,
@@ -1014,20 +1015,20 @@ def _yes_no(value: object) -> str:
 
 
 def _diagnostic_rows(diagnostics: dict, message: object) -> str:
+    ami_statuses = ami_diagnostic_statuses(diagnostics)
     fields = (
         ("host", "Host", False),
         ("port", "Port", False),
         ("baseUrl", "API URL", False),
         ("apiVersion", "API version", False),
-        ("tcpConnected", "TCP", True),
-        ("bannerReceived", "Banner", True),
-        ("loginAccepted", "Login", True),
         ("tokenAccepted", "API token", True),
         ("apiReachable", "API", True),
         ("commandAccepted", "Command", True),
         ("tlsVerification", "TLS verification", True),
     )
     rows: list[str] = []
+    for label, value in ami_statuses:
+        rows.append(f"<div><dt>{label}</dt><dd>{value}</dd></div>")
     for key, label, boolean in fields:
         if key not in diagnostics:
             continue

@@ -4,8 +4,37 @@ import ast
 import unittest
 from pathlib import Path
 
+from pbxsense_agent.diagnostics import ami_diagnostic_statuses
+
 
 class MainRouteStructureTest(unittest.TestCase):
+    def test_ami_diagnostics_progressively_describe_unattempted_checks(self) -> None:
+        self.assertEqual(
+            ami_diagnostic_statuses({
+                "tcpConnected": False,
+                "bannerReceived": False,
+                "loginAccepted": False,
+            }),
+            (
+                ("PBX port", "Unreachable"),
+                ("AMI protocol", "Not attempted"),
+                ("Authentication", "Not attempted"),
+            ),
+        )
+
+    def test_ami_banner_is_optional_when_login_succeeds(self) -> None:
+        self.assertEqual(
+            ami_diagnostic_statuses({
+                "tcpConnected": True,
+                "bannerReceived": False,
+                "loginAccepted": True,
+            }),
+            (
+                ("PBX port", "Reachable"),
+                ("AMI protocol", "Optional (login accepted)"),
+                ("Authentication", "Accepted"),
+            ),
+        )
     def test_pair_route_has_a_direct_html_return(self) -> None:
         """Keep later route declarations from accidentally splitting pair()."""
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
