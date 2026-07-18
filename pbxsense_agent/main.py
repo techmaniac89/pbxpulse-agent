@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import threading
+import time
 from datetime import timedelta
 from html import escape
 from urllib.parse import urlencode
@@ -52,13 +53,16 @@ push_relay = AgentRelay(
 app = FastAPI(title="PBXSense Agent", version=AGENT_VERSION)
 LOCAL_WEB_COOKIE = "pbxsense_agent_local_web"
 LIVE_INTERVAL_SECONDS = 1
-SNAPSHOT_POLL_INTERVAL_SECONDS = 1
+SNAPSHOT_POLL_INTERVAL_SECONDS = settings.snapshot_poll_seconds
+HISTORY_POLL_INTERVAL_SECONDS = settings.history_poll_seconds
 RELAY_PUBLISH_INTERVAL_SECONDS = 5
 _snapshot_task: asyncio.Task[None] | None = None
 _relay_publish_task: asyncio.Task[None] | None = None
 _relay_heartbeat_task: asyncio.Task[None] | None = None
 _snapshot_lock = threading.Lock()
 _cached_home_state: tuple[object, object, list[dict], list[dict], bool] | None = None
+_cached_history: tuple[list, list, list] = ([], [], [])
+_history_refreshed_at = 0.0
 
 
 @app.on_event("startup")
@@ -653,13 +657,12 @@ def _device_card(device: dict[str, object]) -> str:
     if device.get("activityEnabled", True):
         notifications.append("PBX activity")
     rows = {
+        "Model": model or "Not reported",
         "App version": app_version or "Not reported",
         "Notifications": ", ".join(notifications) if notifications else "Disabled",
         "Last registered": str(device.get("updatedAt") or "Not reported"),
         "Registration ID": str(device.get("id") or "Unknown"),
     }
-    if model and model.casefold() != name.strip().casefold():
-        rows = {"Model": model, **rows}
     return f"""
       <article class="device-card">
         <h2>{escape(name)}</h2>
@@ -765,19 +768,31 @@ def _refresh_home_state() -> None:
 
 
 def _refresh_home_state_locked() -> tuple:
-    global _cached_home_state
+    global _cached_home_state, _cached_history, _history_refreshed_at
     snapshot = connector.snapshot()
     if settings.pbx_type in {"asterisk", "grandstream"}:
-        cdr_path, voicemail_path = _history_paths()
+        now_monotonic = time.monotonic()
+        if (
+            _history_refreshed_at == 0
+            or now_monotonic - _history_refreshed_at >= HISTORY_POLL_INTERVAL_SECONDS
+        ):
+            cdr_path, voicemail_path = _history_paths()
+            _cached_history = (
+                read_recent_cdr_calls(cdr_path, limit=1000),
+                read_recent_voicemails(voicemail_path),
+                read_recent_security_events(_security_log_path()),
+            )
+            _history_refreshed_at = now_monotonic
+        recent_calls, voicemails, security_events = _cached_history
         snapshot = snapshot.__class__(
             reachable=snapshot.reachable,
             agent_version=snapshot.agent_version,
             channels=snapshot.channels,
             endpoints=snapshot.endpoints,
             queues=snapshot.queues,
-            recent_calls=read_recent_cdr_calls(cdr_path, limit=1000),
-            voicemails=read_recent_voicemails(voicemail_path),
-            security_events=read_recent_security_events(_security_log_path()),
+            recent_calls=recent_calls,
+            voicemails=voicemails,
+            security_events=security_events,
             error=snapshot.error,
         )
     observed_at = _now(settings.timezone)

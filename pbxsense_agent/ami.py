@@ -215,20 +215,11 @@ class AmiClient:
         sock.sendall(f"{payload}\r\n".encode("utf-8"))
 
     def _read_banner(self, sock: socket.socket) -> str:
-        chunks: list[bytes] = []
         try:
-            while True:
-                chunk = sock.recv(1)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                raw = b"".join(chunks)
-                if raw.endswith(b"\n") or raw.endswith(b"\r\n\r\n"):
-                    break
+            raw = _recv_through(sock, b"\n")
         except TimeoutError as exc:
             raise AmiError("AMI banner timed out") from exc
-
-        return b"".join(chunks).decode("utf-8", errors="replace").strip()
+        return raw.decode("utf-8", errors="replace").strip()
 
     def _read_optional_banner(self, sock: socket.socket) -> tuple[str, str | None]:
         try:
@@ -237,19 +228,13 @@ class AmiClient:
             return "", str(exc)
 
     def _read_packet(self, sock: socket.socket, *, phase: str) -> dict[str, str]:
-        chunks: list[bytes] = []
         try:
-            while True:
-                chunk = sock.recv(1)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                if b"".join(chunks).endswith(b"\r\n\r\n"):
-                    break
+            packet = _recv_through(sock, b"\r\n\r\n")
         except TimeoutError as exc:
             raise AmiError(f"{phase} timed out") from exc
-
-        raw = b"".join(chunks).decode("utf-8", errors="replace")
+        if not packet:
+            raise AmiError(f"{phase} connection closed before the response completed")
+        raw = packet.decode("utf-8", errors="replace")
         fields: dict[str, str] = {}
         for line in raw.splitlines():
             if ":" not in line:
@@ -257,6 +242,33 @@ class AmiClient:
             key, value = line.split(":", 1)
             fields[key.strip()] = value.strip()
         return fields
+
+
+def _recv_through(sock: socket.socket, marker: bytes, *, chunk_size: int = 4096) -> bytes:
+    """Read through a delimiter without consuming the following AMI packet.
+
+    MSG_PEEK lets us use buffered socket reads while preserving the packet
+    boundary for the next call. The previous byte-at-a-time parser repeatedly
+    joined growing byte lists and was disproportionately expensive on ARM.
+    """
+    chunks = bytearray()
+    while True:
+        available = sock.recv(chunk_size, socket.MSG_PEEK)
+        if not available:
+            return bytes(chunks)
+        tail = bytes(chunks[-(len(marker) - 1):]) if len(marker) > 1 else b""
+        marker_index = (tail + available).find(marker)
+        read_size = (
+            marker_index - len(tail) + len(marker)
+            if marker_index >= 0
+            else len(available)
+        )
+        chunk = sock.recv(read_size)
+        if not chunk:
+            return bytes(chunks)
+        chunks.extend(chunk)
+        if marker_index >= 0:
+            return bytes(chunks)
 
 
 def _channels_from_events(events: list[AmiEvent]) -> list[AmiChannel]:

@@ -46,6 +46,8 @@ class AgentSettings:
     grandstream_voicemail_path: str = ""
     grandstream_recordings_path: str = ""
     grandstream_security_log_path: str = ""
+    snapshot_poll_seconds: float = 1
+    history_poll_seconds: float = 30
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -135,6 +137,12 @@ class AgentSettings:
                 "GRANDSTREAM_UCM_SECURITY_LOG_PATH",
                 "",
             ).strip(),
+            snapshot_poll_seconds=max(
+                0.5, _env_float("PBXSENSE_SNAPSHOT_POLL_SECONDS", 1)
+            ),
+            history_poll_seconds=max(
+                5, _env_float("PBXSENSE_HISTORY_POLL_SECONDS", 30)
+            ),
         )
 
 

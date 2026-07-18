@@ -43,7 +43,8 @@ class MainRouteStructureTest(unittest.TestCase):
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 
         self.assertIn('app_version.split("+", 1)[0]', source)
-        self.assertIn("model.casefold() != name.strip().casefold()", source)
+        self.assertIn('"Model": model or "Not reported"', source)
+        self.assertNotIn("model.casefold() != name.strip().casefold()", source)
         self.assertNotIn("Push registration details for this Agent only.", source)
 
 

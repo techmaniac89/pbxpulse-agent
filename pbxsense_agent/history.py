@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -56,10 +57,8 @@ def read_recent_cdr_calls(path: str, *, limit: int = 30) -> list[CdrCall]:
     if not _is_file(cdr_path):
         return []
 
-    rows: list[list[str]] = []
     try:
-        with cdr_path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-            rows = list(csv.reader(handle))
+        rows = _recent_cdr_rows(cdr_path, limit=limit)
     except OSError:
         return []
 
@@ -85,6 +84,27 @@ def read_recent_cdr_calls(path: str, *, limit: int = 30) -> list[CdrCall]:
 
     calls.sort(key=lambda call: call.started_at or datetime.min, reverse=True)
     return calls[:limit]
+
+
+def _recent_cdr_rows(path: Path, *, limit: int) -> list[list[str]]:
+    """Read a bounded tail of an append-only Asterisk CDR file.
+
+    Large installations can keep years of rows in Master.csv. Reading that
+    complete file for every history refresh makes recent-call visibility scale
+    with the lifetime of the PBX instead of the requested result size.
+    """
+    target_bytes = min(16 * 1024 * 1024, max(1024 * 1024, limit * 2048 * 3))
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        size = handle.tell()
+        start = max(0, size - target_bytes)
+        handle.seek(start)
+        raw = handle.read()
+    if start:
+        newline = raw.find(b"\n")
+        raw = raw[newline + 1:] if newline >= 0 else b""
+    text = raw.decode("utf-8", errors="replace")
+    return list(csv.reader(io.StringIO(text, newline="")))
 
 
 def interpreted_call_kind(call: CdrCall) -> str:

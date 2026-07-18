@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +10,8 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from pbxsense_agent.ami import (
+    AmiClient,
+    AmiError,
     AmiEvent,
     _endpoint_role,
     _endpoints_from_events,
@@ -50,6 +53,29 @@ from pbxsense_agent.yeastar import YeastarClient, _channels_from_call_response
 
 
 class PulseMappingTest(unittest.TestCase):
+    def test_ami_packet_reader_treats_peer_close_as_failure_not_busy_loop(self) -> None:
+        reader, writer = socket.socketpair()
+        writer.close()
+        try:
+            with self.assertRaisesRegex(AmiError, "connection closed"):
+                AmiClient.__new__(AmiClient)._read_packet(reader, phase="QueueStatus")
+        finally:
+            reader.close()
+
+    def test_ami_packet_reader_preserves_the_next_buffered_packet(self) -> None:
+        reader, writer = socket.socketpair()
+        try:
+            writer.sendall(
+                b"Response: Success\r\nMessage: one\r\n\r\n"
+                b"Event: Complete\r\nMessage: two\r\n\r\n"
+            )
+            client = AmiClient.__new__(AmiClient)
+            self.assertEqual(client._read_packet(reader, phase="one")["Message"], "one")
+            self.assertEqual(client._read_packet(reader, phase="two")["Message"], "two")
+        finally:
+            writer.close()
+            reader.close()
+
     def test_gui_pbx_names_normalize_to_engine_connectors(self) -> None:
         self.assertEqual(_normalize_pbx_type("freepbx"), "asterisk")
         self.assertEqual(_normalize_pbx_type("issabel"), "asterisk")

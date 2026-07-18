@@ -5,7 +5,7 @@ It runs near the PBX, observes PBX state through the safest available connector,
 and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
-The current Agent release is `0.3.16-beta` on the **Breeze** channel.
+The current Agent release is `0.3.18-beta` on the **Breeze** channel.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
 Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, or a development mock connector.
@@ -123,6 +123,10 @@ are:
 - `PBXSENSE_DISPLAY_NAME`: friendly name shown by the Agent.
 - `PBXSENSE_TIMEZONE`: IANA timezone used for timestamps and history.
 - `PBXSENSE_AGENT_TOKEN`: optional shared token for pairing and remote access.
+- `PBXSENSE_SNAPSHOT_POLL_SECONDS`: live PBX refresh cadence; defaults to `1`
+  seconds and is clamped to at least `0.5` seconds.
+- `PBXSENSE_HISTORY_POLL_SECONDS`: cached CDR, voicemail, and security-history
+  refresh cadence; defaults to `30` seconds and is clamped to at least `5`.
 - `ASTERISK_AMI_*`: Asterisk AMI host, port, username, password, and timeout.
 - `FREESWITCH_ESL_*`: FreeSWITCH Event Socket host, port, and password.
 - `ASTERISK_CDR_CSV_PATH`: Asterisk CDR CSV path for call history.
@@ -297,6 +301,8 @@ ASTERISK_AMI_HOST=127.0.0.1
 ASTERISK_AMI_PORT=5038
 ASTERISK_AMI_USERNAME=pbxsense
 ASTERISK_AMI_PASSWORD=<secret>
+PBXSENSE_SNAPSHOT_POLL_SECONDS=1
+PBXSENSE_HISTORY_POLL_SECONDS=30
 ASTERISK_CDR_CSV_PATH=/var/log/asterisk/cdr-csv/Master.csv
 ASTERISK_VOICEMAIL_PATH=/var/spool/asterisk/voicemail
 ASTERISK_SECURITY_LOG_PATH=/var/log/asterisk/security
@@ -587,7 +593,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.3.16-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.3.18-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -598,7 +604,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.3.16-beta`, attach the matching files from
+For a release tag such as `agent-v0.3.18-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 
