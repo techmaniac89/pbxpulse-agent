@@ -66,6 +66,7 @@ class AmiSnapshot:
 @dataclass(frozen=True)
 class _MomentState:
     reachable: bool
+    monitored_extensions: frozenset[str]
     queue_waiting: tuple[tuple[str, int], ...]
     unavailable_extensions: frozenset[str]
     voicemail_keys: frozenset[str]
@@ -82,6 +83,7 @@ class ActivityTracker:
         self._previous: _MomentState | None = None
         self._events: list[dict] = []
         self._reported_phone_recoveries: dict[str, datetime] = {}
+        self._outstanding_phone_outages: set[str] = set()
         self._busy_queues: dict[str, frozenset[str]] = {}
         self._recovered_trunks_waiting_for_call: set[str] = set()
         self._lock = Lock()
@@ -95,6 +97,9 @@ class ActivityTracker:
                 # can produce Activity even when they recovered earlier today.
                 for extension in current.unavailable_extensions:
                     self._reported_phone_recoveries.pop(extension, None)
+                self._outstanding_phone_outages.update(
+                    current.unavailable_extensions
+                )
                 if self._previous is not None:
                     self._record_transitions(self._previous, current, now)
                 self._events = [
@@ -173,18 +178,26 @@ class ActivityTracker:
             )
         self._recovered_trunks_waiting_for_call.difference_update(successful_recoveries)
 
-        recovered = previous.unavailable_extensions - current.unavailable_extensions
+        # A connector can occasionally return a partial endpoint snapshot.
+        # A previously offline phone is recovered only when that exact
+        # extension is present again and explicitly no longer unavailable.
+        recovered = (
+            self._outstanding_phone_outages
+            & current.monitored_extensions
+            - current.unavailable_extensions
+        )
         new_recoveries = {
             extension
             for extension in recovered
             if extension not in self._reported_phone_recoveries
         }
         if new_recoveries:
+            self._outstanding_phone_outages.difference_update(new_recoveries)
             self._reported_phone_recoveries.update(
                 {extension: now for extension in new_recoveries}
             )
             count = len(new_recoveries)
-            if not current.unavailable_extensions:
+            if not self._outstanding_phone_outages:
                 title = "All monitored phones are reachable again."
                 body = "The previously unavailable phone(s) recovered."
             else:
@@ -197,7 +210,10 @@ class ActivityTracker:
                 body=body,
                 why="An endpoint changed from unavailable to reachable.",
                 technical={
-                    "recovered_extensions": ",".join(sorted(new_recoveries))
+                    "recovered_extensions": ",".join(sorted(new_recoveries)),
+                    "remaining_unavailable_extensions": ",".join(
+                        sorted(self._outstanding_phone_outages)
+                    ),
                 },
             )
 
@@ -355,6 +371,11 @@ def _moment_state(snapshot: AmiSnapshot) -> _MomentState:
         for endpoint in snapshot.endpoints
         if endpoint.role != "trunk" and _endpoint_unavailable(endpoint)
     )
+    monitored_extensions = frozenset(
+        endpoint.extension
+        for endpoint in snapshot.endpoints
+        if endpoint.role != "trunk"
+    )
     voicemail_keys = frozenset(
         f"{message.mailbox}|{message.caller}|{message.created_at.isoformat()}"
         for message in snapshot.voicemails
@@ -379,6 +400,7 @@ def _moment_state(snapshot: AmiSnapshot) -> _MomentState:
     )
     return _MomentState(
         reachable=snapshot.reachable,
+        monitored_extensions=monitored_extensions,
         queue_waiting=queue_waiting,
         unavailable_extensions=unavailable_extensions,
         voicemail_keys=voicemail_keys,

@@ -1547,6 +1547,59 @@ class PulseMappingTest(unittest.TestCase):
             )
         )
 
+    def test_all_phones_recovered_waits_for_every_offline_phone_to_reappear(self) -> None:
+        now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
+        tracker = ActivityTracker()
+        tracker.observe(
+            AmiSnapshot(reachable=True, agent_version="test", endpoints=[
+                AmiEndpoint(extension="101", device_state="Unavailable"),
+                AmiEndpoint(extension="102", device_state="Unavailable"),
+                AmiEndpoint(extension="103", device_state="Unavailable"),
+            ]),
+            now,
+        )
+        tracker.observe(
+            AmiSnapshot(reachable=True, agent_version="test", endpoints=[
+                AmiEndpoint(extension="101", device_state="Reachable"),
+                AmiEndpoint(extension="102", device_state="Unavailable"),
+                AmiEndpoint(extension="103", device_state="Unavailable"),
+            ]),
+            now + timedelta(seconds=1),
+        )
+        events = tracker.observe(
+            AmiSnapshot(reachable=True, agent_version="test", endpoints=[
+                AmiEndpoint(extension="101", device_state="Reachable"),
+                AmiEndpoint(extension="102", device_state="Reachable"),
+                # Simulate a partial PBX snapshot that temporarily omits 103.
+            ]),
+            now + timedelta(seconds=2),
+        )
+        recovery_events = [
+            event for event in events
+            if event["kind"] == "pbx_phone_recovered_activity"
+        ]
+        self.assertFalse(any(
+            event["title"] == "All monitored phones are reachable again."
+            for event in recovery_events
+        ))
+        self.assertEqual(
+            recovery_events[0]["technical"]["remaining_unavailable_extensions"],
+            "103",
+        )
+
+        events = tracker.observe(
+            AmiSnapshot(reachable=True, agent_version="test", endpoints=[
+                AmiEndpoint(extension="101", device_state="Reachable"),
+                AmiEndpoint(extension="102", device_state="Reachable"),
+                AmiEndpoint(extension="103", device_state="Reachable"),
+            ]),
+            now + timedelta(seconds=3),
+        )
+        self.assertEqual(
+            events[0]["title"],
+            "All monitored phones are reachable again.",
+        )
+
     def test_cdr_history_replaces_placeholder_destination_with_trunk_number(self) -> None:
         record = CdrCall(
             source="2101234567",
