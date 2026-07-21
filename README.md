@@ -53,8 +53,9 @@ The app should only talk to these Agent surfaces:
 - `GET /pair`
 - `GET /diagnostics` and connector-specific diagnostics when troubleshooting
 - `GET /recordings/{recording-id}` for a recording attached to a returned call
-- `POST /push/devices` and `POST /push/devices/revoke` for the current phone's
-  notification and relay-device registration
+- `POST /push/devices`, `GET /push/devices/status`, and
+  `POST /push/devices/revoke` for the current phone's notification and
+  relay-device registration lifecycle
 
 The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 

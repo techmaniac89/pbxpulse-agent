@@ -81,6 +81,7 @@ GET /pair
 GET /diagnostics
 GET /recordings/{recording-id}
 POST /push/devices
+GET /push/devices/status
 POST /push/devices/revoke
 ```
 
