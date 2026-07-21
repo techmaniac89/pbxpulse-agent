@@ -328,6 +328,12 @@ def _page(*, title: str, body: str) -> str:
             font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
             font-size: 12px;
           }}
+          button.button {{ cursor: pointer; font: inherit; }}
+          .button.danger {{
+            background: rgba(240, 154, 131, 0.12);
+            color: #ffb29f;
+            border-color: rgba(240, 154, 131, 0.34);
+          }}
           .pairing-text-row {{
             display: grid;
             grid-template-columns: minmax(0, 1fr) 44px;
@@ -416,9 +422,19 @@ def _page(*, title: str, body: str) -> str:
             border-radius: 18px;
             background: #191612;
           }}
+          .device-card-header {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 12px;
+          }}
+          .device-card-title {{ min-width: 0; }}
           .device-card h2 {{ margin: 0 0 4px; font-size: 18px; }}
-          .device-card p {{ margin: 0 0 12px; color: var(--muted); }}
+          .device-card p {{ margin: 0; color: var(--muted); }}
           .device-card .diagnostics div {{ grid-template-columns: minmax(100px, 0.4fr) 1fr; }}
+          .device-actions {{ flex: 0 0 auto; margin: 0; }}
+          .device-actions .button {{ min-height: 36px; padding: 0 13px; }}
           dt {{ color: var(--muted); }}
           dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
           .footer {{
@@ -637,14 +653,25 @@ def paired_apps(request: Request):
             <span class="dot"></span>
             <span>{len(devices)} registered {'app' if len(devices) == 1 else 'apps'}<small>Push registration details.</small></span>
           </div>
-          <div class="device-list">{''.join(_device_card(device) for device in devices if isinstance(device, dict))}</div>
+          <div class="device-list">{''.join(_device_card(device, request) for device in devices if isinstance(device, dict))}</div>
         """
+    removal = request.query_params.get("removal", "")
+    removal_notice = (
+        '<div class="status ok"><span class="dot"></span><span>App removed'
+        '<small>This app will no longer receive notifications from this Agent.</small></span></div>'
+        if removal == "removed"
+        else '<div class="status attention"><span class="dot"></span><span>App was not removed'
+        '<small>The relay could not complete the request. Try again.</small></span></div>'
+        if removal == "failed"
+        else ""
+    )
     return _page(
         title="Paired PBXSense apps",
         body=f"""
           <section class="hero-card">
             {_brand_html()}
             <div class="section-heading"><span>Paired apps</span><small>Push relay</small></div>
+            {removal_notice}
             {content}
             <div class="actions">
               <a class="button primary" href="/pair{_link_token_suffix(request)}">Add another app</a>
@@ -653,6 +680,20 @@ def paired_apps(request: Request):
           </section>
         """,
     )
+
+
+@app.post("/apps/remove")
+def remove_paired_app(request: Request):
+    _require_token(request)
+    device_id = request.query_params.get("deviceId", "").strip()
+    removed = bool(device_id) and push_relay.remove_device(
+        fcm_token="", relay_device_id=device_id
+    )
+    query = {"removal": "removed" if removed else "failed"}
+    token = request.query_params.get("token", "").strip()
+    if token:
+        query["token"] = token
+    return RedirectResponse("/apps?" + urlencode(query), status_code=303)
 
 
 def _waiting_for_registered_app() -> str:
@@ -665,7 +706,7 @@ def _waiting_for_registered_app() -> str:
     """
 
 
-def _device_card(device: dict[str, object]) -> str:
+def _device_card(device: dict[str, object], request: Request) -> str:
     name = str(device.get("deviceName") or device.get("deviceModel") or "PBXSense app")
     model = str(device.get("deviceModel") or "").strip()
     app_version = str(device.get("appVersion") or "").strip()
@@ -686,10 +727,26 @@ def _device_card(device: dict[str, object]) -> str:
         "Last registered": str(device.get("updatedAt") or "Not reported"),
         "Registration ID": str(device.get("id") or "Unknown"),
     }
+    revoke_id = str(device.get("revokeId") or "").strip()
+    remove_query = {"deviceId": revoke_id}
+    query_token = request.query_params.get("token", "").strip()
+    if query_token:
+        remove_query["token"] = query_token
+    remove_action = (
+        f'<form class="device-actions" method="post" action="/apps/remove?{urlencode(remove_query)}" '
+        'onsubmit="return confirm(\'Remove this app? It will stop receiving notifications from this Agent.\')">'
+        '<button class="button danger" type="submit">Remove app</button></form>'
+        if revoke_id else ""
+    )
     return f"""
       <article class="device-card">
-        <h2>{escape(name)}</h2>
-        <p>{escape(subtitle)}</p>
+        <div class="device-card-header">
+          <div class="device-card-title">
+            <h2>{escape(name)}</h2>
+            <p>{escape(subtitle)}</p>
+          </div>
+          {remove_action}
+        </div>
         <dl class="diagnostics">{''.join(f'<div><dt>{escape(label)}</dt><dd>{escape(value)}</dd></div>' for label, value in rows.items())}</dl>
       </article>
     """

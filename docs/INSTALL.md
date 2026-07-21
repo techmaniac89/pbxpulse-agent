@@ -94,6 +94,10 @@ OS version, notification preferences, and last registration time. Push tokens
 are never displayed. Older app registrations show unavailable metadata as
 **Not reported** until that app registers again.
 
+Each card has **Remove app**. After browser confirmation, the Agent revokes
+only that app's push and Internet Relay device registration. The removed app
+must scan a fresh pairing QR before it can register with this Agent again.
+
 The token lives in:
 
 ```text

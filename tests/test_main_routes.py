@@ -76,6 +76,14 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertNotIn("model.casefold() != name.strip().casefold()", source)
         self.assertNotIn("Push registration details for this Agent only.", source)
 
+    def test_paired_apps_can_be_removed_individually(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn('@app.post("/apps/remove")', source)
+        self.assertIn('device.get("revokeId")', source)
+        self.assertIn("Remove this app?", source)
+        self.assertIn("Remove app</button>", source)
+
 
 if __name__ == "__main__":
     unittest.main()

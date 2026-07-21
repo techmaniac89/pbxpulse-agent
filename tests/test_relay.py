@@ -194,9 +194,26 @@ class RelayTest(unittest.TestCase):
 
             activation = relay.activation()
 
-            self.assertEqual(activation, {})
+            self.assertEqual(
+                activation,
+                {"id": "activation_new", "secret": "secret_new"},
+            )
             self.assertTrue(relay.configured)
             self.assertEqual(relay.status()["agentId"], "agent_claimed")
+
+    def test_enrolled_agent_issues_activation_for_an_additional_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _ActivationRelay(str(Path(directory) / "identity.json"))
+            relay._state["agent_id"] = "agent_existing"
+
+            activation = relay.activation()
+
+            self.assertEqual(
+                activation,
+                {"id": "activation_new", "secret": "secret_new"},
+            )
+            self.assertEqual(relay.requests[0][0], "/v1/activations")
+            self.assertEqual(relay.status()["agentId"], "agent_existing")
 
     def test_expired_activation_is_replaced_in_pairing_qr(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -479,6 +496,22 @@ class RelayTest(unittest.TestCase):
             self.assertFalse(result["available"])
             self.assertEqual(result["state"], "notEnrolled")
             self.assertEqual(result["devices"], [])
+
+    def test_removes_one_relay_device_by_registration_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _RecordingRelay(str(Path(directory) / "identity.json"))
+
+            self.assertTrue(relay.remove_device(
+                fcm_token="", relay_device_id="device_phone_one"
+            ))
+            self.assertEqual(
+                relay.requests[-1],
+                (
+                    "/v1/agents/agent_test/devices/revoke",
+                    {"fcmToken": "", "relayDeviceId": "device_phone_one"},
+                    True,
+                ),
+            )
 
     def test_queues_device_registration_until_qr_enrollment_completes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

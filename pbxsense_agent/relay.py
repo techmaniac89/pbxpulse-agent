@@ -89,7 +89,7 @@ class AgentRelay:
                 return {}
 
     def _activation_locked(self) -> dict[str, str]:
-        if not self._url or self._state.get("agent_id"):
+        if not self._url:
             return {}
         activation = self._state.get("activation")
         if isinstance(activation, dict) and activation.get("id") and activation.get("secret"):
@@ -101,8 +101,11 @@ class AgentRelay:
                         signed=False,
                     )
                     if self._adopt_claimed_activation(status):
-                        return {}
-                    if status.get("expired"):
+                        # The claimed activation connected one app. Continue
+                        # below and issue a fresh capability for the next app,
+                        # using this Agent's same long-lived signing identity.
+                        pass
+                    elif status.get("expired"):
                         self._state.pop("activation", None)
                         self._save()
                     else:

@@ -25,7 +25,7 @@ from firebase_admin import firestore, messaging
 from google.api_core.exceptions import AlreadyExists
 
 
-app = FastAPI(title="PBXSense Push Relay", version="0.4.6")
+app = FastAPI(title="PBXSense Push Relay", version="0.4.7")
 firebase_admin.initialize_app(options={"projectId": os.getenv("GOOGLE_CLOUD_PROJECT")})
 db = firestore.client()
 _admin_token = os.getenv("PBXSENSE_RELAY_ADMIN_TOKEN", "").strip()
@@ -242,6 +242,7 @@ async def list_devices(agent_id: str, request: Request) -> dict[str, object]:
         devices.append(
             {
                 "id": snapshot.id if device.get("accessTokenHash") else snapshot.id[:12],
+                "revokeId": snapshot.id,
                 "platform": str(device.get("platform", "unknown")),
                 "appVersion": str(device.get("appVersion", "")),
                 "deviceModel": str(device.get("deviceModel", "")),
@@ -266,7 +267,7 @@ async def revoke_device(agent_id: str, request: Request) -> dict[str, str]:
     if not requested_device_id and not token:
         raise HTTPException(status_code=400, detail="Device identity is required")
     device_id = requested_device_id or hashlib.sha256(token.encode("utf-8")).hexdigest()
-    db.collection("agents").document(agent_id).collection("devices").document(device_id).delete()
+    _delete_device_registration(agent_id, device_id)
     return {"status": "revoked"}
 
 
@@ -434,7 +435,7 @@ async def revoke_own_device(
         hashlib.sha256(token.encode("utf-8")).hexdigest(), expected
     ):
         raise HTTPException(status_code=401, detail="Invalid device credential")
-    device_ref.delete()
+    _delete_device_registration(agent_id, device_id, device=device)
     return {"status": "removed"}
 
 
@@ -481,7 +482,7 @@ async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
     body, _ = await _authenticate_agent(agent_id, request, touch_presence=False)
     fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
     device_id = hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
-    db.collection("agents").document(agent_id).collection("devices").document(device_id).delete()
+    _delete_device_registration(agent_id, device_id)
     return {"status": "removed"}
 
 
@@ -641,6 +642,31 @@ def _optional_identifier(value: object) -> str:
         return ""
 
 
+def _delete_device_registration(
+    agent_id: str,
+    device_id: str,
+    *,
+    device: dict[str, Any] | None = None,
+) -> None:
+    device_ref = (
+        db.collection("agents").document(agent_id)
+        .collection("devices").document(device_id)
+    )
+    if device is None:
+        snapshot = device_ref.get()
+        device = (snapshot.to_dict() or {}) if snapshot.exists else {}
+    fcm_token = str(device.get("fcmToken", ""))
+    device_ref.delete()
+    if not fcm_token:
+        return
+    token_ref = db.collection("deviceTokens").document(
+        hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
+    )
+    pointer = token_ref.get()
+    if pointer.exists and str((pointer.to_dict() or {}).get("devicePath", "")) == device_ref.path:
+        token_ref.delete()
+
+
 def _remove_invalid_tokens(agent_id: str, devices: list[dict[str, Any]], responses: list[Any]) -> int:
     removed = 0
     for device, response in zip(devices, responses, strict=True):
@@ -648,7 +674,7 @@ def _remove_invalid_tokens(agent_id: str, devices: list[dict[str, Any]], respons
             continue
         device_id = str(device.get("_documentId", ""))
         if device_id:
-            db.collection("agents").document(agent_id).collection("devices").document(device_id).delete()
+            _delete_device_registration(agent_id, device_id, device=device)
             removed += 1
     return removed
 
