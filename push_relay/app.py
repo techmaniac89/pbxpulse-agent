@@ -25,7 +25,7 @@ from firebase_admin import firestore, messaging
 from google.api_core.exceptions import AlreadyExists
 
 
-app = FastAPI(title="PBXSense Push Relay", version="0.4.7")
+app = FastAPI(title="PBXSense Push Relay", version="0.4.8")
 firebase_admin.initialize_app(options={"projectId": os.getenv("GOOGLE_CLOUD_PROJECT")})
 db = firestore.client()
 _admin_token = os.getenv("PBXSENSE_RELAY_ADMIN_TOKEN", "").strip()
@@ -42,8 +42,8 @@ def health() -> dict[str, str]:
 async def create_activation(request: Request) -> dict[str, str]:
     """Create the opaque, short-lived capability embedded in the Agent QR."""
     body = await _json_body(request)
-    public_key = _clean_text(body.get("publicKey"), "publicKey")
-    display_name = _clean_text(body.get("displayName"), "displayName")
+    public_key = _bounded_text(body.get("publicKey"), "publicKey", 200)
+    display_name = _bounded_text(body.get("displayName"), "displayName", 120)
     _decode_public_key(public_key)
     activation_id = f"activate_{secrets.token_urlsafe(12)}"
     activation_secret = secrets.token_urlsafe(32)
@@ -63,7 +63,7 @@ async def create_activation(request: Request) -> dict[str, str]:
 @app.post("/v1/activations/{activation_id}/claim")
 async def claim_activation(activation_id: str, request: Request) -> dict[str, str]:
     body = await _json_body(request)
-    secret = _clean_text(body.get("activationSecret"), "activationSecret")
+    secret = _bounded_text(body.get("activationSecret"), "activationSecret", 200)
     activation_ref = db.collection("activations").document(activation_id)
     snapshot = activation_ref.get()
     if not snapshot.exists:
@@ -124,7 +124,9 @@ async def claim_activation(activation_id: str, request: Request) -> dict[str, st
         result.update({"deviceId": relay_device_id, "deviceAccessToken": relay_access_token})
         return result
 
-    site_name = _clean_text(body.get("siteName", activation.get("displayName")), "siteName")
+    site_name = _bounded_text(
+        body.get("siteName", activation.get("displayName")), "siteName", 120
+    )
     site_id = f"site_{secrets.token_urlsafe(10)}"
     agent_id = f"agent_{secrets.token_urlsafe(12)}"
     batch = db.batch()
@@ -170,7 +172,7 @@ def _create_relay_device(
 @app.post("/v1/activations/{activation_id}/status")
 async def activation_status(activation_id: str, request: Request) -> dict[str, object]:
     body = await _json_body(request)
-    secret = _clean_text(body.get("activationSecret"), "activationSecret")
+    secret = _bounded_text(body.get("activationSecret"), "activationSecret", 200)
     snapshot = db.collection("activations").document(activation_id).get()
     activation = snapshot.to_dict() if snapshot.exists else None
     if not activation or not hmac.compare_digest(
@@ -189,7 +191,7 @@ async def activation_status(activation_id: str, request: Request) -> dict[str, o
 @app.post("/v1/agents/{agent_id}/devices")
 async def register_device(agent_id: str, request: Request) -> dict[str, str]:
     body, agent = await _authenticate_agent(agent_id, request)
-    fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
+    fcm_token = _bounded_text(body.get("fcmToken"), "fcmToken", 4096)
     requested_device_id = _optional_identifier(body.get("relayDeviceId"))
     device_id = requested_device_id or hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
     encryption_public_key = _optional_text(body.get("encryptionPublicKey"), limit=100)
@@ -199,7 +201,9 @@ async def register_device(agent_id: str, request: Request) -> dict[str, str]:
             "fcmToken": fcm_token,
             "meaningfulEnabled": bool(body.get("meaningfulEnabled", True)),
             "activityEnabled": bool(body.get("activityEnabled", True)),
-            "platform": _clean_text(body.get("platform", "android"), "platform"),
+            "platform": _bounded_text(
+                body.get("platform", "android"), "platform", 32
+            ),
             "appVersion": _optional_text(body.get("appVersion")),
             "deviceModel": _optional_text(body.get("deviceModel")),
             "deviceName": _optional_text(body.get("deviceName")),
@@ -407,7 +411,7 @@ async def register_own_device(
     """Let a paired app register push without reaching the Agent's LAN URL."""
     device_ref, device = _authenticate_relay_device(agent_id, device_id, request)
     body = await _json_body(request)
-    fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
+    fcm_token = _bounded_text(body.get("fcmToken"), "fcmToken", 4096)
     previous_token = str(device.get("fcmToken", ""))
     if previous_token and previous_token != fcm_token:
         previous_token_ref = db.collection("deviceTokens").document(
@@ -425,7 +429,9 @@ async def register_own_device(
             "fcmToken": fcm_token,
             "meaningfulEnabled": bool(body.get("meaningfulEnabled", True)),
             "activityEnabled": bool(body.get("activityEnabled", True)),
-            "platform": _clean_text(body.get("platform", "android"), "platform"),
+            "platform": _bounded_text(
+                body.get("platform", "android"), "platform", 32
+            ),
             "appVersion": _optional_text(body.get("appVersion")),
             "deviceModel": _optional_text(body.get("deviceModel")),
             "deviceName": _optional_text(body.get("deviceName")),
@@ -517,7 +523,7 @@ async def sweep_agent_heartbeats(request: Request) -> dict[str, int]:
 @app.delete("/v1/agents/{agent_id}/devices")
 async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
     body, _ = await _authenticate_agent(agent_id, request, touch_presence=False)
-    fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
+    fcm_token = _bounded_text(body.get("fcmToken"), "fcmToken", 4096)
     device_id = hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
     _delete_device_registration(agent_id, device_id)
     return {"status": "removed"}
@@ -526,11 +532,11 @@ async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
 @app.post("/v1/agents/{agent_id}/events")
 async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
     event, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
-    event_id = _clean_text(event.get("id"), "id")
-    title = _clean_text(event.get("title"), "title")
-    body = _clean_text(event.get("body"), "body")
-    category = _clean_text(event.get("category"), "category")
-    importance = _clean_text(event.get("importance"), "importance")
+    event_id = _bounded_identifier(event.get("id"), "id")
+    title = _bounded_text(event.get("title"), "title", 256)
+    body = _bounded_text(event.get("body"), "body", 2048)
+    category = _bounded_text(event.get("category"), "category", 64)
+    importance = _bounded_text(event.get("importance"), "importance", 32)
     if category == "recommendation":
         return {"status": "ignored", "reason": "tips_are_feed_only"}
 
@@ -599,6 +605,9 @@ async def _authenticate_agent(
     touch_presence: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     raw_body = await request.body()
+    max_bytes = 20 * 1024 * 1024 if request.url.path.endswith("/secure/snapshots") else 1024 * 1024
+    if len(raw_body) > max_bytes:
+        raise HTTPException(status_code=413, detail="Request body is too large")
     try:
         body = json.loads(raw_body)
     except json.JSONDecodeError as exc:
@@ -792,9 +801,12 @@ def _authenticate_relay_device(
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    if len(raw) > 64 * 1024:
+        raise HTTPException(status_code=413, detail="Request body is too large")
     try:
-        body = await request.json()
-    except json.JSONDecodeError as exc:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="JSON body required") from exc
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="JSON object required")
@@ -838,6 +850,13 @@ def _clean_text(value: object, name: str) -> str:
     text = str(value or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail=f"{name} is required")
+    return text
+
+
+def _bounded_text(value: object, name: str, limit: int) -> str:
+    text = _clean_text(value, name)
+    if len(text) > limit:
+        raise HTTPException(status_code=400, detail=f"{name} is too long")
     return text
 
 

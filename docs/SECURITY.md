@@ -45,6 +45,20 @@ HTML request creates an HTTP-only, same-site cookie for later Agent-page links.
 The Agent does not enable cross-origin browser access. `GET /health` is the only
 unauthenticated route and returns only a basic service status.
 
+State-changing Agent routes accept native-app Bearer/header authentication.
+When the protected Agent page uses its local HTTP-only admin cookie instead,
+the Agent also requires an exact matching browser Origin or Referer. This
+prevents another web service on the same host but a different port from using
+that cookie for push registration or paired-app removal.
+
+Push registration bodies and relay text fields have explicit size limits.
+Oversized request bodies are rejected before they can be persisted to the
+Agent outbox, Firestore, or Firebase Cloud Messaging.
+
+Release dependencies require `cryptography` 48.0.1 or newer within the current
+major line. This floor is intentional: older 45.x resolution was affected by
+published security advisories and must not be restored by a compatibility cap.
+
 Generate a token:
 
 ```bash

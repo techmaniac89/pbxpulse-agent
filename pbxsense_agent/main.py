@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import timedelta
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -685,6 +685,7 @@ def paired_apps(request: Request):
 @app.post("/apps/remove")
 def remove_paired_app(request: Request):
     _require_token(request)
+    _require_safe_cookie_mutation(request)
     device_id = request.query_params.get("deviceId", "").strip()
     removed = bool(device_id) and push_relay.remove_device(
         fcm_token="", relay_device_id=device_id
@@ -928,15 +929,22 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
 async def register_push_device(request: Request) -> dict[str, object]:
     """Forward this paired phone's FCM token to the enrolled relay Agent."""
     _require_token(request)
-    try:
-        payload = await request.json()
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="JSON body required") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="JSON object required")
+    _require_safe_cookie_mutation(request)
+    payload = await _bounded_json_object(request)
     fcm_token = str(payload.get("fcmToken", "")).strip()
-    if not fcm_token:
-        raise HTTPException(status_code=400, detail="fcmToken is required")
+    _require_bounded_text(fcm_token, "fcmToken", 4096)
+    for field, limit in (
+        ("platform", 32),
+        ("appVersion", 120),
+        ("deviceModel", 120),
+        ("deviceName", 120),
+        ("osVersion", 120),
+        ("relayDeviceId", 96),
+        ("encryptionPublicKey", 100),
+    ):
+        value = str(payload.get(field, "")).strip()
+        if value:
+            _require_bounded_text(value, field, limit)
     return await asyncio.to_thread(
         push_relay.register_device,
         fcm_token=fcm_token,
@@ -966,12 +974,39 @@ def push_device_registration_status(request: Request) -> dict[str, int]:
 @app.post("/push/devices/revoke")
 async def revoke_push_device(request: Request) -> dict[str, bool]:
     _require_token(request)
-    payload = await request.json()
-    token = str(payload.get("fcmToken", "")).strip() if isinstance(payload, dict) else ""
-    relay_device_id = str(payload.get("relayDeviceId", "")).strip() if isinstance(payload, dict) else ""
+    _require_safe_cookie_mutation(request)
+    payload = await _bounded_json_object(request)
+    token = str(payload.get("fcmToken", "")).strip()
+    relay_device_id = str(payload.get("relayDeviceId", "")).strip()
+    if token:
+        _require_bounded_text(token, "fcmToken", 4096)
+    if relay_device_id:
+        _require_bounded_text(relay_device_id, "relayDeviceId", 96)
     return {"revoked": push_relay.remove_device(
         fcm_token=token, relay_device_id=relay_device_id
     )}
+
+
+async def _bounded_json_object(
+    request: Request, *, max_bytes: int = 64 * 1024
+) -> dict[str, object]:
+    raw = await request.body()
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=413, detail="Request body is too large")
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="JSON body required") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+    return payload
+
+
+def _require_bounded_text(value: str, field: str, limit: int) -> None:
+    if not value:
+        raise HTTPException(status_code=400, detail=f"{field} is required")
+    if len(value) > limit:
+        raise HTTPException(status_code=400, detail=f"{field} is too long")
 
 
 def _moment_hours(request: Request) -> int:
@@ -1102,9 +1137,7 @@ def _agent_status() -> dict:
         if relay_status["connected"] is True
         else "Connecting securely"
     )
-    diagnostics["internetRelayProtocol"] = str(
-        relay_status["protocolVersion"]
-    )
+    diagnostics["internetRelayProtocol"] = f"v{relay_status['protocolVersion']}"
     diagnostics["ok"] = diagnostics.get("ok") is True or diagnostics.get("loginAccepted") is True
     if diagnostics["ok"]:
         diagnostics["message"] = f"{connector.diagnostics_label} login succeeded."
@@ -1127,7 +1160,7 @@ def _diagnostic_rows(diagnostics: dict, message: object) -> str:
         ("commandAccepted", "Command", True),
         ("tlsVerification", "TLS verification", True),
         ("internetRelayState", "Internet relay", False),
-        ("internetRelayProtocol", "Relay protocol", False),
+        ("internetRelayProtocol", "Secure relay version", False),
     )
     rows: list[str] = []
     for label, value in ami_statuses:
@@ -1200,6 +1233,29 @@ def _request_token(request: Request) -> str:
     if _has_valid_local_web_cookie(request):
         return settings.token
     return request.headers.get("x-pbxsense-token", "").strip()
+
+
+def _require_safe_cookie_mutation(request: Request) -> None:
+    """Reject cross-origin browser writes when the local admin cookie is auth."""
+    authorization = request.headers.get("authorization", "")
+    if (
+        authorization.lower().startswith("bearer ")
+        or request.query_params.get("token", "").strip()
+        or request.headers.get("x-pbxsense-token", "").strip()
+        or not _has_valid_local_web_cookie(request)
+    ):
+        return
+    expected = f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    origin = request.headers.get("origin", "").rstrip("/")
+    if not origin:
+        referer = request.headers.get("referer", "")
+        parsed = urlparse(referer)
+        origin = (
+            f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+            if parsed.netloc else ""
+        )
+    if not origin or not hmac.compare_digest(origin, expected):
+        raise HTTPException(status_code=403, detail="Same-origin request required")
 
 
 def _websocket_authorized(websocket: WebSocket) -> bool:

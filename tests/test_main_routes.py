@@ -94,6 +94,19 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn("Remove this app?", source)
         self.assertIn("Remove app</button>", source)
 
+    def test_cookie_authenticated_writes_require_same_origin(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("def _require_safe_cookie_mutation", source)
+        self.assertIn("Same-origin request required", source)
+        self.assertGreaterEqual(source.count("_require_safe_cookie_mutation(request)"), 3)
+
+    def test_relay_diagnostic_uses_customer_facing_version_label(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn('("internetRelayProtocol", "Secure relay version", False)', source)
+        self.assertIn('f"v{relay_status[\'protocolVersion\']}"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
