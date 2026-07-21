@@ -75,16 +75,17 @@ Agent installation and relay identity remain shared, while every app registers
 its own FCM device, notification preferences, encryption key, and relay access
 credential.
 
-Closed-app notifications need only `PBXSENSE_RELAY_URL`. To also use encrypted
-Home snapshots when the phone cannot reach the Agent over LAN/VPN, explicitly
-set this in the Agent environment and restart it:
+Closed-app notifications need only `PBXSENSE_RELAY_URL`. Encrypted Home
+snapshots are available by default but remain disabled in each app until the
+user enables Internet Relay while pairing. To prohibit the feature for the
+whole Agent installation, set this and restart it:
 
 ```env
-PBXSENSE_INTERNET_RELAY_ENABLED=true
+PBXSENSE_INTERNET_RELAY_ENABLED=false
 ```
 
 The app still needs LAN/VPN access for pairing, diagnostics, recordings, and
-the one-second live WebSocket experience. Internet Relay is a five-second
+the one-second live WebSocket experience. Internet Relay is a fifteen-second
 sanitized Home fallback, not a public Agent endpoint.
 
 The protected Agent status page also includes **Paired apps**. It shows the

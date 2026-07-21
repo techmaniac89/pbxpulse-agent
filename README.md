@@ -5,7 +5,7 @@ It runs near the PBX, observes PBX state through the safest available connector,
 and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
-The current Agent release is `0.4.0-beta` on the **Breeze** channel.
+The current Agent release is `0.4.2-beta` on the **Breeze** channel.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
 Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, or a development mock connector.
@@ -132,11 +132,13 @@ are:
 - `PBXSENSE_TIMEZONE`: IANA timezone used for timestamps and history.
 - `PBXSENSE_AGENT_TOKEN`: shared token for local/VPN/direct-Agent pairing and
   protected Agent endpoints. It is not the app's Internet Relay credential.
-- `PBXSENSE_INTERNET_RELAY_ENABLED`: opts this installation into encrypted
-  Internet Relay snapshots after relay service 0.4.0 is deployed; defaults to
-  `false`.
-- `PBXSENSE_INTERNET_RELAY_POLL_SECONDS`: encrypted snapshot cadence; defaults
-  to `5` seconds. Control exchanges are rate-limited to once per minute.
+- `PBXSENSE_INTERNET_RELAY_ENABLED`: keeps encrypted Internet Relay available;
+  defaults to `true`. No PBX snapshot is uploaded until an app explicitly
+  enables it while pairing. Set it to `false` only to prohibit Internet Relay
+  for the whole Agent installation.
+- `PBXSENSE_INTERNET_RELAY_POLL_SECONDS`: changed-snapshot check cadence;
+  defaults to `15` seconds. Control exchanges are rate-limited to once every
+  five minutes.
 - `PBXSENSE_SNAPSHOT_POLL_SECONDS`: live PBX refresh cadence; defaults to `1`
   seconds and is clamped to at least `0.5` seconds.
 - `PBXSENSE_HISTORY_POLL_SECONDS`: cached CDR, voicemail, and security-history
@@ -613,7 +615,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.4.0-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.4.2-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -624,7 +626,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.4.0-beta`, attach the matching files from
+For a release tag such as `agent-v0.4.2-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

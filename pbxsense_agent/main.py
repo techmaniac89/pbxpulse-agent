@@ -860,6 +860,7 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
     payload["connection"]["pushRelayAgentId"] = str(
         push_relay.status().get("agentId", "")
     )
+    payload["internetRelay"] = internet_relay.status()
     return payload
 
 

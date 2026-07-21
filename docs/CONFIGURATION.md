@@ -27,11 +27,12 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Leave empty only for deliberately local-only installs. |
 | `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
 | `PBXSENSE_RELAY_TIMEOUT` | `5` | Outbound relay HTTP timeout in seconds. |
-| `PBXSENSE_INTERNET_RELAY_ENABLED` | `false` | Opts this installation into end-to-end encrypted Internet Relay snapshots after relay service 0.4.0 is deployed. |
-| `PBXSENSE_INTERNET_RELAY_POLL_SECONDS` | `5` | Encrypted snapshot cadence, clamped to at least 2 seconds. Control checks run at most once per minute. |
+| `PBXSENSE_INTERNET_RELAY_ENABLED` | `true` | Makes encrypted Internet Relay available to apps that explicitly enable it while pairing. Set `false` to prohibit it for this Agent. |
+| `PBXSENSE_INTERNET_RELAY_POLL_SECONDS` | `15` | Changed-snapshot check cadence, clamped to at least 5 seconds. Unchanged snapshots are not rewritten; control checks run at most once every five minutes. |
 
-Internet Relay is opt-in because enabling it exports encrypted PBX snapshots to
-the configured hosted service. Every paired app receives a distinct envelope;
+Internet Relay remains opt-in per app. The Agent capability is ready by default,
+but no snapshot is uploaded until an app explicitly enables it and registers an
+encryption key. Every opted-in app receives a distinct envelope;
 the relay cannot decrypt it. The projection removes PBX host/port details and
 recording references. Diagnostics, recordings, and PBX control are never sent
 through this path. Restart the Agent after changing either relay setting.

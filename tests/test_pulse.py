@@ -157,6 +157,16 @@ class PulseMappingTest(unittest.TestCase):
         self.assertFalse(settings.grandstream_ami_tls)
         self.assertIsInstance(connector, GrandstreamUcmClient)
 
+    def test_internet_relay_capability_defaults_ready_but_can_be_prohibited(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(AgentSettings.from_env().internet_relay_enabled)
+        with patch.dict(
+            os.environ,
+            {"PBXSENSE_INTERNET_RELAY_ENABLED": "false"},
+            clear=True,
+        ):
+            self.assertFalse(AgentSettings.from_env().internet_relay_enabled)
+
     def test_yeastar_active_call_response_maps_to_snapshot_channels(self) -> None:
         channels = _channels_from_call_response(
             {

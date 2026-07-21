@@ -25,7 +25,7 @@ from firebase_admin import firestore, messaging
 from google.api_core.exceptions import AlreadyExists
 
 
-app = FastAPI(title="PBXSense Push Relay", version="0.4.0")
+app = FastAPI(title="PBXSense Push Relay", version="0.4.1")
 firebase_admin.initialize_app(options={"projectId": os.getenv("GOOGLE_CLOUD_PROJECT")})
 db = firestore.client()
 _admin_token = os.getenv("PBXSENSE_RELAY_ADMIN_TOKEN", "").strip()
@@ -217,7 +217,7 @@ async def register_device(agent_id: str, request: Request) -> dict[str, str]:
 @app.post("/v1/agents/{agent_id}/devices/list")
 async def list_devices(agent_id: str, request: Request) -> dict[str, object]:
     """Return device metadata to its owning Agent without exposing FCM tokens."""
-    _, _ = await _authenticate_agent(agent_id, request)
+    _, _ = await _authenticate_agent(agent_id, request, touch_presence=False)
     devices: list[dict[str, object]] = []
     for snapshot in db.collection("agents").document(agent_id).collection("devices").stream():
         device = snapshot.to_dict() or {}
@@ -254,20 +254,19 @@ async def revoke_device(agent_id: str, request: Request) -> dict[str, str]:
 
 @app.post("/v1/agents/{agent_id}/heartbeat")
 async def heartbeat(agent_id: str, request: Request) -> dict[str, str]:
-    _, agent = await _authenticate_agent(agent_id, request)
+    _, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
     agent_ref = db.collection("agents").document(agent_id)
     was_lost = bool(agent.get("lostAt"))
-    agent_ref.update({"lastSeenAt": firestore.SERVER_TIMESTAMP})
     if was_lost:
         _send_agent_status(agent_id, "PBXSense Agent is reachable again.", "Live PBX updates have resumed.")
-    agent_ref.update({"lostAt": None})
+    agent_ref.update({"lastSeenAt": firestore.SERVER_TIMESTAMP, "lostAt": None})
     return {"status": "ok"}
 
 
 @app.post("/v1/agents/{agent_id}/secure/exchange")
 async def secure_exchange(agent_id: str, request: Request) -> dict[str, object]:
     """Exchange bounded control frames over an outbound-only Agent session."""
-    body, agent = await _authenticate_agent(agent_id, request)
+    body, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
     await _require_replay_protected_signature(agent_id, agent, request)
     if body.get("protocolVersion") != 1:
         raise HTTPException(status_code=400, detail="Unsupported secure relay protocol")
@@ -327,7 +326,7 @@ async def secure_exchange(agent_id: str, request: Request) -> dict[str, object]:
 
 @app.post("/v1/agents/{agent_id}/secure/snapshots")
 async def publish_secure_snapshots(agent_id: str, request: Request) -> dict[str, int]:
-    body, agent = await _authenticate_agent(agent_id, request)
+    body, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
     await _require_replay_protected_signature(agent_id, agent, request)
     envelopes = body.get("envelopes", [])
     if not isinstance(envelopes, list) or len(envelopes) > 20:
@@ -376,12 +375,24 @@ async def read_secure_snapshot(agent_id: str, device_id: str, request: Request) 
         hashlib.sha256(token.encode("utf-8")).hexdigest(), expected
     ):
         raise HTTPException(status_code=401, detail="Invalid device credential")
+    agent_snapshot = db.collection("agents").document(agent_id).get()
+    agent = agent_snapshot.to_dict() if agent_snapshot.exists else None
+    last_seen_at = agent.get("lastSeenAt") if agent else None
+    if (
+        not isinstance(last_seen_at, datetime)
+        or last_seen_at < datetime.now(timezone.utc) - timedelta(seconds=AGENT_LOSS_TIMEOUT_SECONDS)
+    ):
+        return {"available": False, "reason": "agentOffline"}
     snapshot = device_ref.collection("secureSnapshots").document("latest").get()
     if not snapshot.exists:
         return {"available": False}
     envelope = snapshot.to_dict() or {}
     envelope.pop("updatedAt", None)
-    return {"available": True, "envelope": envelope}
+    return {
+        "available": True,
+        "agentLastSeenAt": last_seen_at.isoformat(),
+        "envelope": envelope,
+    }
 
 
 @app.post("/v1/internal/agents/{agent_id}/secure/ping")
@@ -424,7 +435,7 @@ async def sweep_agent_heartbeats(request: Request) -> dict[str, int]:
 
 @app.delete("/v1/agents/{agent_id}/devices")
 async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
-    body, _ = await _authenticate_agent(agent_id, request)
+    body, _ = await _authenticate_agent(agent_id, request, touch_presence=False)
     fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
     device_id = hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
     db.collection("agents").document(agent_id).collection("devices").document(device_id).delete()
@@ -433,7 +444,7 @@ async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
 
 @app.post("/v1/agents/{agent_id}/events")
 async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
-    event, agent = await _authenticate_agent(agent_id, request)
+    event, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
     event_id = _clean_text(event.get("id"), "id")
     title = _clean_text(event.get("title"), "title")
     body = _clean_text(event.get("body"), "body")
@@ -500,7 +511,12 @@ async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
     return {"status": "accepted", "sent": response.success_count, "failed": response.failure_count}
 
 
-async def _authenticate_agent(agent_id: str, request: Request) -> tuple[dict[str, Any], dict[str, Any]]:
+async def _authenticate_agent(
+    agent_id: str,
+    request: Request,
+    *,
+    touch_presence: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     raw_body = await request.body()
     try:
         body = json.loads(raw_body)
@@ -527,7 +543,10 @@ async def _authenticate_agent(agent_id: str, request: Request) -> tuple[dict[str
         _decode_public_key(agent["publicKey"]).verify(_decode_signature(signature), message)
     except (InvalidSignature, ValueError, KeyError) as exc:
         raise HTTPException(status_code=401, detail="Invalid Agent signature") from exc
-    db.collection("agents").document(agent_id).update({"lastSeenAt": firestore.SERVER_TIMESTAMP})
+    if touch_presence:
+        db.collection("agents").document(agent_id).update(
+            {"lastSeenAt": firestore.SERVER_TIMESTAMP}
+        )
     return body, agent
 
 

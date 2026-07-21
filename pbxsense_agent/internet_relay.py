@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 _COMMAND_ID = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
 SECURE_RELAY_PROTOCOL_VERSION = 1
-CONTROL_EXCHANGE_INTERVAL_SECONDS = 60
+CONTROL_EXCHANGE_INTERVAL_SECONDS = 300
 
 
 class SecureInternetRelay:

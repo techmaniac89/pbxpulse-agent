@@ -132,8 +132,9 @@ when closed-app push notifications are required.
 If push notifications work but the app cannot use encrypted Home snapshots
 away from the LAN:
 
-- Confirm the Agent uses relay service 0.4.0 and app/Agent are 0.4.0 builds.
-- Set `PBXSENSE_INTERNET_RELAY_ENABLED=true` and restart the Agent.
+- Confirm the Agent uses relay service 0.4.1 and current Breeze app/Agent builds.
+- Confirm `PBXSENSE_INTERNET_RELAY_ENABLED` is `true` (the default) and restart
+  the Agent after changing an explicit override.
 - Open Agent diagnostics and confirm Internet relay is enabled and connected.
 - Scan a fresh protected pairing QR; manually entering only an Agent IP/token
   cannot create the app's encryption key and per-device relay credential.

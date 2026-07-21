@@ -58,7 +58,6 @@ class AgentRelay:
         self._last_heartbeat_at = 0.0
         self._secure_devices: list[dict[str, object]] = []
         self._secure_devices_refreshed_at = 0.0
-        self._secure_snapshot_published_at = 0.0
 
     @property
     def configured(self) -> bool:
@@ -335,7 +334,7 @@ class AgentRelay:
             raw = json.dumps(projected, separators=(",", ":"), sort_keys=True).encode("utf-8")
             if (
                 not self._secure_devices_refreshed_at
-                or time.monotonic() - self._secure_devices_refreshed_at >= 60
+                or time.monotonic() - self._secure_devices_refreshed_at >= 300
             ):
                 response = self._request(
                     f"/v1/agents/{self._state['agent_id']}/devices/list",
@@ -357,10 +356,7 @@ class AgentRelay:
             fingerprint = hashlib.sha256(
                 raw + json.dumps(recipients, separators=(",", ":")).encode("utf-8")
             ).hexdigest()
-            if (
-                self._state.get("secure_snapshot_fingerprint") == fingerprint
-                and time.monotonic() - self._secure_snapshot_published_at < 45
-            ):
+            if self._state.get("secure_snapshot_fingerprint") == fingerprint:
                 return 0
             sequence = int(self._state.get("secure_snapshot_sequence", 0)) + 1
             envelopes = [
@@ -379,7 +375,6 @@ class AgentRelay:
             )
             stored = int(result.get("stored", 0))
             if stored:
-                self._secure_snapshot_published_at = time.monotonic()
                 self._state["secure_snapshot_sequence"] = sequence
                 self._state["secure_snapshot_fingerprint"] = fingerprint
                 self._save()
@@ -563,6 +558,13 @@ def _secure_snapshot_projection(snapshot: dict[str, object]) -> dict[str, object
         for call in calls:
             if isinstance(call, dict):
                 call.pop("recording", None)
+    relay = projected.get("internetRelay")
+    if isinstance(relay, dict):
+        projected["internetRelay"] = {
+            "enabled": bool(relay.get("enabled")),
+            "connected": bool(relay.get("connected")),
+            "lastError": str(relay.get("lastError", ""))[:240],
+        }
     return projected
 
 

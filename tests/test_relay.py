@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +15,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from pbxsense_agent.relay import AgentRelay, _encrypt_snapshot_for_device
+from pbxsense_agent.relay import (
+    AgentRelay,
+    _encrypt_snapshot_for_device,
+    _secure_snapshot_projection,
+)
 
 
 def _b64(value: bytes) -> str:
@@ -93,10 +98,43 @@ class _SecureExchangeRelay(_RecordingRelay):
         replay_protected: bool = False,
     ) -> dict:
         self.requests.append((path, payload, replay_protected))
+        if path.endswith("/secure/snapshots"):
+            return {"stored": len(payload.get("envelopes", []))}
         return {"protocolVersion": 1, "commands": []}
 
 
 class RelayTest(unittest.TestCase):
+    def test_secure_projection_exposes_only_customer_facing_relay_status(self) -> None:
+        projected = _secure_snapshot_projection({
+            "connection": {"pbxHost": "10.0.0.1", "pbxPort": 5038},
+            "internetRelay": {
+                "enabled": True, "connected": True, "lastError": "",
+                "sessionId": "private-session", "lastExchangeAt": 123,
+            },
+            "calls": [],
+        })
+        self.assertEqual(projected["internetRelay"], {
+            "enabled": True, "connected": True, "lastError": "",
+        })
+
+    def test_unchanged_snapshot_is_not_rewritten_on_a_timer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _SecureExchangeRelay(str(Path(directory) / "identity.json"))
+            app_private = X25519PrivateKey.generate()
+            public = app_private.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            relay._secure_devices = [{
+                "id": "device_test", "encryptionPublicKey": _b64(public),
+            }]
+            relay._secure_devices_refreshed_at = time.monotonic()
+
+            self.assertEqual(relay.publish_secure_snapshot({"mood": "Quiet"}), 1)
+            self.assertEqual(relay.publish_secure_snapshot({"mood": "Quiet"}), 0)
+            writes = [path for path, _, _ in relay.requests
+                      if path.endswith("/secure/snapshots")]
+            self.assertEqual(len(writes), 1)
+
     def test_secure_snapshot_is_end_to_end_decryptable_by_only_the_app_key(self) -> None:
         app_private = X25519PrivateKey.generate()
         app_public = app_private.public_key().public_bytes(
