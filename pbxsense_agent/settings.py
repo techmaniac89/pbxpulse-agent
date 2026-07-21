@@ -48,6 +48,8 @@ class AgentSettings:
     grandstream_security_log_path: str = ""
     snapshot_poll_seconds: float = 1
     history_poll_seconds: float = 30
+    internet_relay_enabled: bool = False
+    internet_relay_poll_seconds: float = 5
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -142,6 +144,12 @@ class AgentSettings:
             ),
             history_poll_seconds=max(
                 5, _env_float("PBXSENSE_HISTORY_POLL_SECONDS", 30)
+            ),
+            internet_relay_enabled=_env_bool(
+                "PBXSENSE_INTERNET_RELAY_ENABLED", False
+            ),
+            internet_relay_poll_seconds=max(
+                2, _env_float("PBXSENSE_INTERNET_RELAY_POLL_SECONDS", 5)
             ),
         )
 

@@ -5,7 +5,7 @@ It runs near the PBX, observes PBX state through the safest available connector,
 and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
-The current Agent release is `0.3.20-beta` on the **Breeze** channel.
+The current Agent release is `0.4.0-beta` on the **Breeze** channel.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
 Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, or a development mock connector.
@@ -35,6 +35,10 @@ out of the user-facing PBXSense experience.
 - Polls the PBX once through a central snapshot pipeline, then streams the same
   consistent state to every connected app. Eligible Signal transitions and
   Agent presence are published separately to the push relay.
+- Includes an opt-in Secure Internet Relay data path. The Agent makes only
+  outbound HTTPS requests and encrypts a separate sanitized Home snapshot for
+  each paired app with X25519, HKDF-SHA256, and AES-256-GCM. The relay stores
+  opaque ciphertext and cannot read PBX content.
 - Serves pairing pages and QR payloads for connecting PBXSense to the local
   Agent.
 - Provides diagnostics for connector setup, especially Asterisk AMI.
@@ -43,11 +47,14 @@ out of the user-facing PBXSense experience.
 
 The app should only talk to these Agent surfaces:
 
+- `GET /health`
 - `GET /home`
 - `WS /live`
 - `GET /pair`
 - `GET /diagnostics` and connector-specific diagnostics when troubleshooting
 - `GET /recordings/{recording-id}` for a recording attached to a returned call
+- `POST /push/devices` and `POST /push/devices/revoke` for the current phone's
+  notification and relay-device registration
 
 The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 
@@ -123,7 +130,13 @@ are:
 - `PBXSENSE_AGENT_MODE`: connector mode; normally `ami`, `freeswitch`, `yeastar`, or `mock`.
 - `PBXSENSE_DISPLAY_NAME`: friendly name shown by the Agent.
 - `PBXSENSE_TIMEZONE`: IANA timezone used for timestamps and history.
-- `PBXSENSE_AGENT_TOKEN`: optional shared token for pairing and remote access.
+- `PBXSENSE_AGENT_TOKEN`: shared token for local/VPN/direct-Agent pairing and
+  protected Agent endpoints. It is not the app's Internet Relay credential.
+- `PBXSENSE_INTERNET_RELAY_ENABLED`: opts this installation into encrypted
+  Internet Relay snapshots after relay service 0.4.0 is deployed; defaults to
+  `false`.
+- `PBXSENSE_INTERNET_RELAY_POLL_SECONDS`: encrypted snapshot cadence; defaults
+  to `5` seconds. Control exchanges are rate-limited to once per minute.
 - `PBXSENSE_SNAPSHOT_POLL_SECONDS`: live PBX refresh cadence; defaults to `1`
   seconds and is clamped to at least `0.5` seconds.
 - `PBXSENSE_HISTORY_POLL_SECONDS`: cached CDR, voicemail, and security-history
@@ -161,7 +174,7 @@ Linux service installs write the final environment file to:
 - `docs/CONNECTORS.md`: connector contract and extension guidance.
 - `docs/TROUBLESHOOTING.md`: diagnostics, AMI/ESL failures, pairing, and history.
 - `docs/DEVELOPMENT.md`: local setup, tests, project layout, and release notes.
-- `SECURITY.md`: network boundaries, credentials, tokens, and service hardening.
+- `docs/SECURITY.md`: network boundaries, credentials, tokens, and service hardening.
 
 ## Recommended Install
 
@@ -586,7 +599,10 @@ http://<agent-host>:8765/pair?token=your-token
 ```
 
 The QR contains a `pbxsense://pair?...` payload with the Agent URL and token.
-PBXSense setup can scan this QR and fill the Agent URL and token automatically.
+When relay activation is ready it also contains the hosted relay URL and an
+opaque, short-lived activation ID/secret. PBXSense setup uses those fields to
+create a separate per-app encrypted-relay credential; the app-generated private
+key never enters the QR, Agent, or relay. A local-only QR omits the relay fields.
 
 ## GitHub Release Assets
 
@@ -597,7 +613,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.3.20-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.4.0-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -608,7 +624,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.3.20-beta`, attach the matching files from
+For a release tag such as `agent-v0.4.0-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 

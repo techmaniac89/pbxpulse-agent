@@ -17,10 +17,24 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, `yeastar`, or `mock`. |
 | `PBXSENSE_DISPLAY_NAME` | connector name | Friendly PBX name shown by the Agent. |
 | `PBXSENSE_TIMEZONE` | `TZ` or empty | IANA timezone for history and timestamps. |
-| `PBXSENSE_AGENT_TOKEN` | empty | Optional shared token for pairing and remote access. |
+| `PBXSENSE_AGENT_TOKEN` | empty | Shared token for local/VPN/direct-Agent pairing and protected endpoints; it is not sent to the hosted relay. |
 | `PBXSENSE_CONNECT_TIMEOUT` | `3` | Connector TCP/login timeout in seconds. |
 | `PBXSENSE_AGENT_PORT` | `8765` | Service port used by the Linux systemd installer. |
 | `PBXSENSE_EXTENSION_NAMES` | empty | Optional friendly-name map such as `101=Reception,120=Support`. |
+| `PBXSENSE_SNAPSHOT_POLL_SECONDS` | `1` | Central live PBX polling cadence, clamped to at least 0.5 seconds. |
+| `PBXSENSE_HISTORY_POLL_SECONDS` | `30` | CDR, voicemail, recording, and security-history refresh cadence, clamped to at least 5 seconds. |
+| `PBXSENSE_QUALITY_FREQUENCY_SECONDS` | `180` | Evidence window before aggregate availability Tips are emitted. Immediate per-device Health Signals do not wait for it. |
+| `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Leave empty only for deliberately local-only installs. |
+| `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
+| `PBXSENSE_RELAY_TIMEOUT` | `5` | Outbound relay HTTP timeout in seconds. |
+| `PBXSENSE_INTERNET_RELAY_ENABLED` | `false` | Opts this installation into end-to-end encrypted Internet Relay snapshots after relay service 0.4.0 is deployed. |
+| `PBXSENSE_INTERNET_RELAY_POLL_SECONDS` | `5` | Encrypted snapshot cadence, clamped to at least 2 seconds. Control checks run at most once per minute. |
+
+Internet Relay is opt-in because enabling it exports encrypted PBX snapshots to
+the configured hosted service. Every paired app receives a distinct envelope;
+the relay cannot decrypt it. The projection removes PBX host/port details and
+recording references. Diagnostics, recordings, and PBX control are never sent
+through this path. Restart the Agent after changing either relay setting.
 
 `PBXSENSE_PBX_TYPE` aliases:
 
@@ -143,9 +157,10 @@ rotate an existing token.
 
 ## Endpoint Access
 
-If `PBXSENSE_AGENT_TOKEN` is empty, local testing is simpler but remote access is
-not protected by the Agent token. Production and LAN deployments should set a
-long random token.
+If `PBXSENSE_AGENT_TOKEN` is empty, local testing is simpler but protected Agent
+endpoints have no shared-token authentication. Production and LAN deployments
+should set a long random token. Internet Relay uses a separate per-app device
+credential and does not reuse this token.
 
 Localhost, private LAN, and VPN clients must authenticate just like other
 clients. A valid token on an HTML request creates an HTTP-only, same-site cookie.

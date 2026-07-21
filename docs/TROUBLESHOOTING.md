@@ -129,6 +129,21 @@ must not return HTTP 500 for this condition. Check relay connectivity and write
 access to `PBXSENSE_RELAY_IDENTITY_PATH`, then refresh the page before pairing
 when closed-app push notifications are required.
 
+If push notifications work but the app cannot use encrypted Home snapshots
+away from the LAN:
+
+- Confirm the Agent uses relay service 0.4.0 and app/Agent are 0.4.0 builds.
+- Set `PBXSENSE_INTERNET_RELAY_ENABLED=true` and restart the Agent.
+- Open Agent diagnostics and confirm Internet relay is enabled and connected.
+- Scan a fresh protected pairing QR; manually entering only an Agent IP/token
+  cannot create the app's encryption key and per-device relay credential.
+- Keep `/var/lib/pbxsense-agent/relay_identity.json` persistent across Docker
+  rebuilds. If the identity was recreated, pair the app again.
+
+The app rejects encrypted snapshots older than 60 seconds. If the Agent or its
+Internet connection is down, a brief secure connection may therefore change to
+reconnecting; this is intentional and prevents stale PBX state appearing live.
+
 ## Missing History Or Voicemail
 
 If live calls work but history, tips, or voicemail evidence is missing:

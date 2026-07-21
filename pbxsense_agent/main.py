@@ -22,6 +22,7 @@ from .history import (
     read_recent_voicemails,
     security_diagnostics,
 )
+from .internet_relay import SecureInternetRelay
 from .live import home_live_events
 from .mock import mock_snapshot
 from .network import is_private_or_loopback_host
@@ -51,6 +52,13 @@ push_relay = AgentRelay(
     display_name=settings.display_name,
     timeout_seconds=settings.relay_timeout_seconds,
 )
+internet_relay = SecureInternetRelay(
+    enabled=settings.internet_relay_enabled,
+    exchange=push_relay.secure_exchange,
+    agent_version=AGENT_VERSION,
+    snapshot_provider=lambda: _home_payload(),
+    snapshot_publisher=push_relay.publish_secure_snapshot,
+)
 app = FastAPI(title="PBXSense Agent", version=AGENT_VERSION)
 LOCAL_WEB_COOKIE = "pbxsense_agent_local_web"
 LIVE_INTERVAL_SECONDS = 1
@@ -60,6 +68,7 @@ RELAY_PUBLISH_INTERVAL_SECONDS = 5
 _snapshot_task: asyncio.Task[None] | None = None
 _relay_publish_task: asyncio.Task[None] | None = None
 _relay_heartbeat_task: asyncio.Task[None] | None = None
+_internet_relay_task: asyncio.Task[None] | None = None
 _snapshot_lock = threading.Lock()
 _cached_home_state: tuple[object, object, list[dict], list[dict], bool] | None = None
 _cached_history: tuple[list, list, list] = ([], [], [])
@@ -68,18 +77,25 @@ _history_refreshed_at = 0.0
 
 @app.on_event("startup")
 async def start_relay_publisher() -> None:
-    global _relay_heartbeat_task, _relay_publish_task, _snapshot_task
+    global _internet_relay_task, _relay_heartbeat_task, _relay_publish_task, _snapshot_task
     _snapshot_task = asyncio.create_task(_snapshot_loop())
     if settings.relay_url:
         _relay_publish_task = asyncio.create_task(_relay_publish_loop())
         _relay_heartbeat_task = asyncio.create_task(_relay_heartbeat_loop())
+        if settings.internet_relay_enabled:
+            _internet_relay_task = asyncio.create_task(_internet_relay_loop())
 
 
 @app.on_event("shutdown")
 async def stop_relay_publisher() -> None:
     tasks = [
         task
-        for task in (_snapshot_task, _relay_publish_task, _relay_heartbeat_task)
+        for task in (
+            _snapshot_task,
+            _relay_publish_task,
+            _relay_heartbeat_task,
+            _internet_relay_task,
+        )
         if task is not None
     ]
     for task in tasks:
@@ -121,6 +137,12 @@ async def _relay_heartbeat_loop() -> None:
             # Network and enrollment failures are retried on the next cadence.
             pass
         await asyncio.sleep(PRESENCE_HEARTBEAT_INTERVAL_SECONDS)
+
+
+async def _internet_relay_loop() -> None:
+    while True:
+        await asyncio.to_thread(internet_relay.poll)
+        await asyncio.sleep(settings.internet_relay_poll_seconds)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -710,6 +732,7 @@ def recording(recording_id: str, request: Request):
 
 def _diagnostics_response(request: Request):
     payload = connector.diagnostics()
+    payload["internetRelay"] = internet_relay.status()
     if settings.pbx_type in {"asterisk", "grandstream"}:
         cdr_path, voicemail_path = _history_paths()
         payload["history"] = history_diagnostics(
@@ -862,6 +885,8 @@ async def register_push_device(request: Request) -> dict[str, object]:
         device_model=str(payload.get("deviceModel", "")),
         device_name=str(payload.get("deviceName", "")),
         os_version=str(payload.get("osVersion", "")),
+        relay_device_id=str(payload.get("relayDeviceId", "")),
+        encryption_public_key=str(payload.get("encryptionPublicKey", "")),
     )
 
 
@@ -881,7 +906,10 @@ async def revoke_push_device(request: Request) -> dict[str, bool]:
     _require_token(request)
     payload = await request.json()
     token = str(payload.get("fcmToken", "")).strip() if isinstance(payload, dict) else ""
-    return {"revoked": push_relay.remove_device(fcm_token=token)}
+    relay_device_id = str(payload.get("relayDeviceId", "")).strip() if isinstance(payload, dict) else ""
+    return {"revoked": push_relay.remove_device(
+        fcm_token=token, relay_device_id=relay_device_id
+    )}
 
 
 def _moment_hours(request: Request) -> int:
@@ -1004,6 +1032,17 @@ def _wants_html(request: Request) -> bool:
 
 def _agent_status() -> dict:
     diagnostics = connector.diagnostics()
+    relay_status = internet_relay.status()
+    diagnostics["internetRelayState"] = (
+        "Disabled"
+        if relay_status["enabled"] is not True
+        else "Connected"
+        if relay_status["connected"] is True
+        else "Connecting securely"
+    )
+    diagnostics["internetRelayProtocol"] = str(
+        relay_status["protocolVersion"]
+    )
     diagnostics["ok"] = diagnostics.get("ok") is True or diagnostics.get("loginAccepted") is True
     if diagnostics["ok"]:
         diagnostics["message"] = f"{connector.diagnostics_label} login succeeded."
@@ -1025,6 +1064,8 @@ def _diagnostic_rows(diagnostics: dict, message: object) -> str:
         ("apiReachable", "API", True),
         ("commandAccepted", "Command", True),
         ("tlsVerification", "TLS verification", True),
+        ("internetRelayState", "Internet relay", False),
+        ("internetRelayProtocol", "Relay protocol", False),
     )
     rows: list[str] = []
     for label, value in ami_statuses:

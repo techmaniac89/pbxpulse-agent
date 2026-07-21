@@ -2,16 +2,14 @@
 
 ## Scope
 
-This service is the production **notification relay**. It provides short-lived
+This service is the production **notification and encrypted data relay**. It provides short-lived
 Agent activation, signed Agent enrollment, presence heartbeats, paired-device
 registration and revocation, and Firebase Cloud Messaging delivery for
 eligible Signals.
 
-It does not proxy the Agent's `/health`, `/home`, `/live`, diagnostics, or
-recording endpoints to the mobile app. It is therefore not the full Canopy
-Internet-access Relay described in the app roadmap. Until that separate data
-path is implemented, live app access away from the LAN requires a VPN or a
-directly reachable HTTPS Agent.
+It does not proxy the Agent's HTTP or WebSocket endpoints. Agent 0.4.0 instead
+publishes sanitized, per-app encrypted Home snapshots that the relay cannot
+decrypt. Diagnostics, recordings, and PBX control remain local/VPN-only.
 
 ## Customer Agent installations
 
@@ -30,7 +28,15 @@ account key, a manual claim code, Cloud Run, Firestore, or Cloud Scheduler.
 
 For a normal customer rollout, install the PBXSense Agent, keep the hosted relay
 URL above, then scan the pairing QR from the app. That is the complete relay
-setup on the customer side.
+setup for enrollment and push notifications. Encrypted Home fallback is an
+explicit Agent opt-in:
+
+```env
+PBXSENSE_INTERNET_RELAY_ENABLED=true
+```
+
+Restart the Agent after enabling it. This setting is not required for push
+notifications and does not make diagnostics, recordings, or PBX control remote.
 
 ## Optional self-hosted relay
 
@@ -89,3 +95,19 @@ access to Firestore itself.
 
 Cloud Logging records only FCM outcome counts (eligible, accepted, failed, and
 invalid registrations removed); it never logs FCM tokens.
+Relay service `0.4.0` adds the encrypted Internet Relay data path. Updated apps
+create an X25519 key during QR activation; the service returns a random,
+per-device access credential and stores only its hash. Agents publish a
+separate AES-256-GCM envelope for each device. Firestore and the Cloud Run
+service see only encrypted snapshot bytes and routing metadata.
+
+The snapshot API deliberately excludes recordings and does not expose
+diagnostics or PBX control. Envelopes carry authenticated sequence and creation
+metadata and updated apps reject data older than 60 seconds. Older apps can
+still claim an activation for push delivery without requesting an encryption
+credential, which permits staged rollout of the Agent, relay, and app.
+
+An administrator can verify an enabled Agent session with an authenticated
+`POST /v1/internal/agents/{agent_id}/secure/ping`. The Agent returns `pong` on
+its following outbound exchange; inspect the `secureCommands` document for its
+completed state. This endpoint is an operator smoke test, not an app API.

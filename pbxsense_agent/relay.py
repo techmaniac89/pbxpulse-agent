@@ -4,9 +4,11 @@ import base64
 import hashlib
 import json
 import os
+import secrets
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -14,9 +16,14 @@ from typing import Any
 try:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.hashes import SHA256
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 except ImportError:  # Existing Agents remain usable before the optional relay is installed.
     serialization = None  # type: ignore[assignment]
     Ed25519PrivateKey = None  # type: ignore[assignment,misc]
+    X25519PrivateKey = X25519PublicKey = AESGCM = HKDF = SHA256 = None  # type: ignore[assignment,misc]
 
 
 # A 15-second cadence paired with the relay's 60-second loss timeout tolerates
@@ -49,6 +56,9 @@ class AgentRelay:
         self._state = self._load()
         self._protect_storage()
         self._last_heartbeat_at = 0.0
+        self._secure_devices: list[dict[str, object]] = []
+        self._secure_devices_refreshed_at = 0.0
+        self._secure_snapshot_published_at = 0.0
 
     @property
     def configured(self) -> bool:
@@ -138,6 +148,8 @@ class AgentRelay:
         device_model: str = "",
         device_name: str = "",
         os_version: str = "",
+        relay_device_id: str = "",
+        encryption_public_key: str = "",
     ) -> dict[str, object]:
         if not fcm_token.strip():
             return {"configured": self.configured, "queued": False, "delivered": False}
@@ -157,6 +169,10 @@ class AgentRelay:
                     "deviceModel": device_model.strip(),
                     "deviceName": device_name.strip(),
                     "osVersion": os_version.strip(),
+                    **({"relayDeviceId": relay_device_id.strip()}
+                       if relay_device_id.strip() else {}),
+                    **({"encryptionPublicKey": encryption_public_key.strip()}
+                       if encryption_public_key.strip() else {}),
                 },
             )
             enrolled = self._ensure_enrolled()
@@ -167,7 +183,11 @@ class AgentRelay:
                 and str(item.get("payload", {}).get("fcmToken", "")) == token
                 for item in self._state.get("outbox", [])
             )
-            delivered = accepted and self._device_is_listed(token)
+            if accepted and relay_device_id.strip() and encryption_public_key.strip():
+                self._secure_devices_refreshed_at = 0.0
+            delivered = accepted and self._device_is_listed(
+                token, relay_device_id.strip()
+            )
             # Pairing claims the relay activation just before the app sends its
             # FCM token. Keep that token durably until enrollment completes
             # instead of losing the registration in this short race window.
@@ -177,9 +197,11 @@ class AgentRelay:
                 "delivered": delivered,
             }
 
-    def _device_is_listed(self, fcm_token: str) -> bool:
+    def _device_is_listed(self, fcm_token: str, relay_device_id: str = "") -> bool:
         """Confirm the relay can read back the registration it accepted."""
-        expected_id = hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()[:12]
+        expected_id = relay_device_id or hashlib.sha256(
+            fcm_token.encode("utf-8")
+        ).hexdigest()[:12]
         try:
             response = self._request(
                 f"/v1/agents/{self._state['agent_id']}/devices/list",
@@ -223,14 +245,18 @@ class AgentRelay:
                 "devices": devices if isinstance(devices, list) else [],
             }
 
-    def remove_device(self, *, fcm_token: str) -> bool:
+    def remove_device(self, *, fcm_token: str, relay_device_id: str = "") -> bool:
         with self._lock:
-            if not fcm_token.strip() or not self._ensure_enrolled():
+            if not (fcm_token.strip() or relay_device_id.strip()) or not self._ensure_enrolled():
                 return False
             try:
                 self._request(
                     f"/v1/agents/{self._state['agent_id']}/devices/revoke",
-                    {"fcmToken": fcm_token.strip()},
+                    {
+                        "fcmToken": fcm_token.strip(),
+                        **({"relayDeviceId": relay_device_id.strip()}
+                           if relay_device_id.strip() else {}),
+                    },
                     signed=True,
                 )
                 return True
@@ -288,6 +314,76 @@ class AgentRelay:
                 self._last_heartbeat_at = time.monotonic()
             except OSError:
                 pass
+
+    def secure_exchange(self, payload: dict[str, object]) -> dict[str, Any]:
+        """Exchange an opaque, capability-scoped secure-relay protocol frame."""
+        with self._lock:
+            if not self._ensure_enrolled():
+                raise OSError("Relay enrollment is not ready")
+            return self._request(
+                f"/v1/agents/{self._state['agent_id']}/secure/exchange",
+                payload,
+                signed=True,
+                replay_protected=True,
+            )
+
+    def publish_secure_snapshot(self, snapshot: dict[str, object]) -> int:
+        with self._lock:
+            if not self._ensure_enrolled():
+                raise OSError("Relay enrollment is not ready")
+            projected = _secure_snapshot_projection(snapshot)
+            raw = json.dumps(projected, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            if (
+                not self._secure_devices_refreshed_at
+                or time.monotonic() - self._secure_devices_refreshed_at >= 60
+            ):
+                response = self._request(
+                    f"/v1/agents/{self._state['agent_id']}/devices/list",
+                    {}, signed=True,
+                )
+                devices = response.get("devices", [])
+                if not isinstance(devices, list):
+                    return 0
+                self._secure_devices = [
+                    device for device in devices if isinstance(device, dict)
+                ]
+                self._secure_devices_refreshed_at = time.monotonic()
+            devices = self._secure_devices
+            recipients = sorted(
+                f"{device.get('id', '')}:{device.get('encryptionPublicKey', '')}"
+                for device in devices
+                if isinstance(device, dict) and device.get("encryptionPublicKey")
+            )
+            fingerprint = hashlib.sha256(
+                raw + json.dumps(recipients, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            if (
+                self._state.get("secure_snapshot_fingerprint") == fingerprint
+                and time.monotonic() - self._secure_snapshot_published_at < 45
+            ):
+                return 0
+            sequence = int(self._state.get("secure_snapshot_sequence", 0)) + 1
+            envelopes = [
+                _encrypt_snapshot_for_device(
+                    raw, str(self._state["agent_id"]), device, sequence
+                )
+                for device in devices
+                if isinstance(device, dict) and device.get("encryptionPublicKey")
+            ]
+            if not envelopes:
+                return 0
+            result = self._request(
+                f"/v1/agents/{self._state['agent_id']}/secure/snapshots",
+                {"protocolVersion": 1, "envelopes": envelopes},
+                signed=True, replay_protected=True,
+            )
+            stored = int(result.get("stored", 0))
+            if stored:
+                self._secure_snapshot_published_at = time.monotonic()
+                self._state["secure_snapshot_sequence"] = sequence
+                self._state["secure_snapshot_fingerprint"] = fingerprint
+                self._save()
+            return stored
 
     def _ensure_enrolled(self) -> bool:
         if not self._url:
@@ -352,7 +448,20 @@ class AgentRelay:
                 ) + 1
             self._save()
 
-    def _request(self, path: str, payload: dict[str, object], *, signed: bool) -> dict[str, Any]:
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, object],
+        *,
+        signed: bool,
+        replay_protected: bool = False,
+    ) -> dict[str, Any]:
+        if replay_protected:
+            parsed_url = urllib.parse.urlparse(self._url)
+            if parsed_url.scheme != "https" and parsed_url.hostname not in {
+                "localhost", "127.0.0.1", "::1",
+            }:
+                raise OSError("Secure Internet Relay requires HTTPS")
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if signed:
@@ -360,6 +469,16 @@ class AgentRelay:
             message = f"{timestamp}\n{path}\n".encode("utf-8") + raw
             signature = _encode(self._private_key().sign(message))
             headers.update({"X-PBXSense-Timestamp": timestamp, "X-PBXSense-Signature": signature})
+            if replay_protected:
+                nonce = secrets.token_urlsafe(18)
+                digest = hashlib.sha256(raw).hexdigest()
+                v2_message = f"{timestamp}\n{nonce}\nPOST\n{path}\n{digest}".encode("utf-8")
+                headers.update({
+                    "X-PBXSense-Nonce": nonce,
+                    "X-PBXSense-Signature-V2": _encode(
+                        self._private_key().sign(v2_message)
+                    ),
+                })
         request = urllib.request.Request(f"{self._url}{path}", data=raw, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
@@ -429,6 +548,60 @@ def _should_relay(signal: dict[str, object]) -> bool:
 
 def _fingerprint(signal: dict[str, object]) -> str:
     return json.dumps(signal, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _secure_snapshot_projection(snapshot: dict[str, object]) -> dict[str, object]:
+    projected = json.loads(json.dumps(snapshot, default=str))
+    connection = projected.get("connection")
+    if isinstance(connection, dict):
+        for key in ("pbxHost", "pbxPort", "pushRelayAgentId"):
+            connection.pop(key, None)
+        connection["kind"] = "internetRelay"
+        connection["label"] = "Connected securely"
+    calls = projected.get("calls")
+    if isinstance(calls, list):
+        for call in calls:
+            if isinstance(call, dict):
+                call.pop("recording", None)
+    return projected
+
+
+def _encrypt_snapshot_for_device(
+    plaintext: bytes,
+    agent_id: str,
+    device: dict[str, object],
+    sequence: int,
+) -> dict[str, object]:
+    if any(value is None for value in (X25519PrivateKey, X25519PublicKey, AESGCM, HKDF, SHA256)):
+        raise OSError("Secure Internet Relay needs the cryptography package")
+    device_id = str(device.get("id", ""))
+    public_key = X25519PublicKey.from_public_bytes(
+        _decode(str(device["encryptionPublicKey"]))
+    )
+    ephemeral = X25519PrivateKey.generate()
+    salt = os.urandom(16)
+    nonce = os.urandom(12)
+    key = HKDF(algorithm=SHA256(), length=32, salt=salt, info=b"pbxsense-secure-relay-v1").derive(
+        ephemeral.exchange(public_key)
+    )
+    from datetime import datetime, timezone
+    created_at = datetime.now(timezone.utc).isoformat()
+    aad = (
+        f"pbxsense-relay-v1|{agent_id}|{device_id}|{sequence}|{created_at}"
+    ).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad)
+    ephemeral_public = ephemeral.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    return {
+        "deviceId": device_id,
+        "sequence": sequence,
+        "createdAt": created_at,
+        "ephemeralPublicKey": _encode(ephemeral_public),
+        "salt": _encode(salt),
+        "nonce": _encode(nonce),
+        "ciphertext": _encode(ciphertext),
+    }
 
 
 def _encode(value: bytes) -> str:

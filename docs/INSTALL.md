@@ -72,7 +72,20 @@ http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
 After the first app enrolls the Agent with the push relay, the same protected
 page changes to **Add another app**. Scan its QR on each additional phone. The
 Agent installation and relay identity remain shared, while every app registers
-its own FCM device and notification preferences.
+its own FCM device, notification preferences, encryption key, and relay access
+credential.
+
+Closed-app notifications need only `PBXSENSE_RELAY_URL`. To also use encrypted
+Home snapshots when the phone cannot reach the Agent over LAN/VPN, explicitly
+set this in the Agent environment and restart it:
+
+```env
+PBXSENSE_INTERNET_RELAY_ENABLED=true
+```
+
+The app still needs LAN/VPN access for pairing, diagnostics, recordings, and
+the one-second live WebSocket experience. Internet Relay is a five-second
+sanitized Home fallback, not a public Agent endpoint.
 
 The protected Agent status page also includes **Paired apps**. It shows the
 apps registered with this Agent, including app version, platform, device model,

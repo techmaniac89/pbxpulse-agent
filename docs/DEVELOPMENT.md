@@ -79,6 +79,9 @@ GET /home
 WS  /live
 GET /pair
 GET /diagnostics
+GET /recordings/{recording-id}
+POST /push/devices
+POST /push/devices/revoke
 ```
 
 The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
@@ -95,6 +98,13 @@ and makes connector load proportional to connected clients.
 The relay presence heartbeat is a separate task. It must remain independent of
 PBX snapshot, history, and signal failures so a slow connector cannot create a
 false Agent-lost notification.
+
+The optional Secure Internet Relay runs as another independent outbound task.
+Keep its command allowlist explicit and bounded. Home data uses a separate
+per-device encrypted envelope; the app-held X25519 private key must never be
+sent to the Agent or relay. Any new relayed field must remain inside that
+envelope and pass the projection/privacy tests. Diagnostics, recordings, and
+PBX control remain outside the Internet Relay contract.
 
 ## Adding Connectors
 

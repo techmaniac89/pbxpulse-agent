@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pbxsense_agent.relay import AgentRelay
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+from pbxsense_agent.relay import AgentRelay, _encrypt_snapshot_for_device
+
+
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def _unb64(value: object) -> bytes:
+    text = str(value)
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
 class _RecordingRelay(AgentRelay):
@@ -30,7 +47,7 @@ class _RecordingRelay(AgentRelay):
             return {
                 "devices": [
                     {
-                        "id": hashlib.sha256(
+                        "id": registration.get("relayDeviceId") or hashlib.sha256(
                             str(registration["fcmToken"]).encode("utf-8")
                         ).hexdigest()[:12]
                     }
@@ -66,7 +83,68 @@ class _ClaimedActivationRelay(_ActivationRelay):
         return super()._request(path, payload, signed=signed)
 
 
+class _SecureExchangeRelay(_RecordingRelay):
+    def _request(
+        self,
+        path: str,
+        payload: dict,
+        *,
+        signed: bool,
+        replay_protected: bool = False,
+    ) -> dict:
+        self.requests.append((path, payload, replay_protected))
+        return {"protocolVersion": 1, "commands": []}
+
+
 class RelayTest(unittest.TestCase):
+    def test_secure_snapshot_is_end_to_end_decryptable_by_only_the_app_key(self) -> None:
+        app_private = X25519PrivateKey.generate()
+        app_public = app_private.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        plaintext = json.dumps({"greeting": "Good morning"}).encode()
+        envelope = _encrypt_snapshot_for_device(
+            plaintext, "agent_test",
+            {"id": "device_test", "encryptionPublicKey": _b64(app_public)}, 7,
+        )
+        ephemeral = X25519PublicKey.from_public_bytes(_unb64(envelope["ephemeralPublicKey"]))
+        key = HKDF(
+            algorithm=SHA256(), length=32, salt=_unb64(envelope["salt"]),
+            info=b"pbxsense-secure-relay-v1",
+        ).derive(app_private.exchange(ephemeral))
+        decrypted = AESGCM(key).decrypt(
+            _unb64(envelope["nonce"]), _unb64(envelope["ciphertext"]),
+            (
+                "pbxsense-relay-v1|agent_test|device_test|7|"
+                + str(envelope["createdAt"])
+            ).encode(),
+        )
+        self.assertEqual(decrypted, plaintext)
+
+    def test_secure_exchange_rejects_plain_http_outside_local_development(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = AgentRelay(
+                url="http://relay.example",
+                identity_path=str(Path(directory) / "identity.json"),
+                display_name="Test PBX",
+            )
+            relay._state["agent_id"] = "agent_test"
+            with self.assertRaisesRegex(OSError, "requires HTTPS"):
+                relay.secure_exchange({"protocolVersion": 1})
+
+    def test_secure_exchange_requires_replay_protected_signing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _SecureExchangeRelay(str(Path(directory) / "identity.json"))
+            result = relay.secure_exchange({"protocolVersion": 1})
+            self.assertEqual(result["protocolVersion"], 1)
+            self.assertEqual(
+                relay.requests[-1],
+                (
+                    "/v1/agents/agent_test/secure/exchange",
+                    {"protocolVersion": 1},
+                    True,
+                ),
+            )
     def test_pair_page_refresh_adopts_claim_before_serving_second_app(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = _ClaimedActivationRelay(str(Path(directory) / "identity.json"))
@@ -272,6 +350,25 @@ class RelayTest(unittest.TestCase):
             self.assertEqual(registration["deviceModel"], "Pixel 8")
             self.assertEqual(registration["deviceName"], "Work phone")
             self.assertEqual(registration["osVersion"], "16")
+
+    def test_secure_device_registration_is_confirmed_by_credential_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _RecordingRelay(str(Path(directory) / "identity.json"))
+
+            result = relay.register_device(
+                fcm_token="token-123",
+                meaningful=True,
+                activity=True,
+                relay_device_id="device_secure",
+                encryption_public_key="app-public-key",
+            )
+
+            self.assertTrue(result["delivered"])
+            registration = next(
+                payload for path, payload, _ in relay.requests if path.endswith("/devices")
+            )
+            self.assertEqual(registration["relayDeviceId"], "device_secure")
+            self.assertEqual(registration["encryptionPublicKey"], "app-public-key")
 
     def test_device_registration_advances_pair_page_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

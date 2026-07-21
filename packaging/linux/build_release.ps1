@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.3.20-beta",
+    [string]$Version = "0.4.0-beta",
     [string]$OutputDir = ""
 )
 
@@ -43,7 +43,6 @@ $AgentEntries = @(
     ".env.example",
     "CODEX.md",
     "README.md",
-    "SECURITY.md",
     "Dockerfile",
     "docker-compose.yml",
     "docker-compose.lan.yml",
