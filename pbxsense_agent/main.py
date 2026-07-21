@@ -10,7 +10,7 @@ from datetime import timedelta
 from html import escape
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .connectors import connector_for_settings
@@ -809,29 +809,32 @@ async def live(websocket: WebSocket) -> None:
         return
     await websocket.accept()
     moment_hours = _websocket_moment_hours(websocket)
-    previous_payload = await asyncio.to_thread(
-        _home_payload,
-        moment_hours=moment_hours,
-    )
-    await websocket.send_json({"type": "home_snapshot", "data": previous_payload})
-    while True:
-        await asyncio.sleep(LIVE_INTERVAL_SECONDS)
-        current_payload = await asyncio.to_thread(
+    try:
+        previous_payload = await asyncio.to_thread(
             _home_payload,
             moment_hours=moment_hours,
         )
-        if current_payload != previous_payload:
-            events = home_live_events(previous_payload, current_payload)
-            if events:
-                for event in events:
-                    await websocket.send_json(event)
-            else:
-                await websocket.send_json({"type": "home_snapshot", "data": current_payload})
+        await websocket.send_json({"type": "home_snapshot", "data": previous_payload})
+        while True:
+            await asyncio.sleep(LIVE_INTERVAL_SECONDS)
+            current_payload = await asyncio.to_thread(
+                _home_payload,
+                moment_hours=moment_hours,
+            )
+            if current_payload != previous_payload:
+                events = home_live_events(previous_payload, current_payload)
+                if events:
+                    for event in events:
+                        await websocket.send_json(event)
+                else:
+                    await websocket.send_json({"type": "home_snapshot", "data": current_payload})
+                previous_payload = current_payload
+                continue
+            for event in home_live_events(previous_payload, current_payload):
+                await websocket.send_json(event)
             previous_payload = current_payload
-            continue
-        for event in home_live_events(previous_payload, current_payload):
-            await websocket.send_json(event)
-        previous_payload = current_payload
+    except WebSocketDisconnect:
+        return
 
 
 def _home_payload(*, moment_hours: int = 24) -> dict:
@@ -934,7 +937,8 @@ async def register_push_device(request: Request) -> dict[str, object]:
     fcm_token = str(payload.get("fcmToken", "")).strip()
     if not fcm_token:
         raise HTTPException(status_code=400, detail="fcmToken is required")
-    return push_relay.register_device(
+    return await asyncio.to_thread(
+        push_relay.register_device,
         fcm_token=fcm_token,
         meaningful=bool(payload.get("meaningfulEnabled", True)),
         activity=bool(payload.get("activityEnabled", True)),

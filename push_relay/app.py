@@ -379,21 +379,7 @@ async def publish_secure_snapshots(agent_id: str, request: Request) -> dict[str,
 
 @app.post("/v1/agents/{agent_id}/devices/{device_id}/secure-snapshot")
 async def read_secure_snapshot(agent_id: str, device_id: str, request: Request) -> dict[str, object]:
-    device_ref = db.collection("agents").document(agent_id).collection("devices").document(device_id)
-    device_snapshot = device_ref.get()
-    if not device_snapshot.exists:
-        raise HTTPException(status_code=401, detail="Unknown device")
-    device = device_snapshot.to_dict() or {}
-    expires_at = device.get("expiresAt")
-    if isinstance(expires_at, datetime) and expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Device credential expired")
-    supplied = request.headers.get("authorization", "")
-    token = supplied[7:].strip() if supplied.lower().startswith("bearer ") else ""
-    expected = str(device.get("accessTokenHash", ""))
-    if not token or not expected or not hmac.compare_digest(
-        hashlib.sha256(token.encode("utf-8")).hexdigest(), expected
-    ):
-        raise HTTPException(status_code=401, detail="Invalid device credential")
+    device_ref, device = _authenticate_relay_device(agent_id, device_id, request)
     agent_snapshot = db.collection("agents").document(agent_id).get()
     agent = agent_snapshot.to_dict() if agent_snapshot.exists else None
     last_seen_at = agent.get("lastSeenAt") if agent else None
@@ -414,15 +400,66 @@ async def read_secure_snapshot(agent_id: str, device_id: str, request: Request) 
     }
 
 
+@app.post("/v1/agents/{agent_id}/devices/{device_id}/registration")
+async def register_own_device(
+    agent_id: str, device_id: str, request: Request
+) -> dict[str, object]:
+    """Let a paired app register push without reaching the Agent's LAN URL."""
+    device_ref, device = _authenticate_relay_device(agent_id, device_id, request)
+    body = await _json_body(request)
+    fcm_token = _clean_text(body.get("fcmToken"), "fcmToken")
+    previous_token = str(device.get("fcmToken", ""))
+    if previous_token and previous_token != fcm_token:
+        previous_token_ref = db.collection("deviceTokens").document(
+            hashlib.sha256(previous_token.encode("utf-8")).hexdigest()
+        )
+        previous_token_snapshot = previous_token_ref.get()
+        if (
+            previous_token_snapshot.exists
+            and str((previous_token_snapshot.to_dict() or {}).get("devicePath", ""))
+            == device_ref.path
+        ):
+            previous_token_ref.delete()
+    device_ref.set(
+        {
+            "fcmToken": fcm_token,
+            "meaningfulEnabled": bool(body.get("meaningfulEnabled", True)),
+            "activityEnabled": bool(body.get("activityEnabled", True)),
+            "platform": _clean_text(body.get("platform", "android"), "platform"),
+            "appVersion": _optional_text(body.get("appVersion")),
+            "deviceModel": _optional_text(body.get("deviceModel")),
+            "deviceName": _optional_text(body.get("deviceName")),
+            "osVersion": _optional_text(body.get("osVersion")),
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+            "expiresAt": datetime.now(timezone.utc) + timedelta(days=30),
+        },
+        merge=True,
+    )
+    token_ref = db.collection("deviceTokens").document(
+        hashlib.sha256(fcm_token.encode("utf-8")).hexdigest()
+    )
+    previous = token_ref.get()
+    previous_path = str((previous.to_dict() or {}).get("devicePath", "")) \
+        if previous.exists else ""
+    current_path = device_ref.path
+    if previous_path and previous_path != current_path:
+        previous_ref = db.document(previous_path)
+        if previous_ref.get().exists:
+            previous_ref.delete()
+    token_ref.set({
+        "devicePath": current_path,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    })
+    logger.info("device_self_registered agent_id=%s device_id=%s", agent_id, device_id)
+    return {"delivered": True, "deviceId": device_id}
+
+
 @app.delete("/v1/agents/{agent_id}/devices/{device_id}")
 async def revoke_own_device(
     agent_id: str, device_id: str, request: Request
 ) -> dict[str, str]:
     """Allow an app to revoke only the relay device its bearer token owns."""
-    device_ref = (
-        db.collection("agents").document(agent_id)
-        .collection("devices").document(device_id)
-    )
+    device_ref = db.collection("agents").document(agent_id).collection("devices").document(device_id)
     snapshot = device_ref.get()
     if not snapshot.exists:
         # A repeated reset is already in the desired state.
@@ -728,6 +765,30 @@ def _device_record(document: Any) -> dict[str, Any]:
     device = document.to_dict() or {}
     device["_documentId"] = document.id
     return device
+
+
+def _authenticate_relay_device(
+    agent_id: str, device_id: str, request: Request
+) -> tuple[Any, dict[str, Any]]:
+    device_ref = (
+        db.collection("agents").document(agent_id)
+        .collection("devices").document(device_id)
+    )
+    snapshot = device_ref.get()
+    if not snapshot.exists:
+        raise HTTPException(status_code=401, detail="Unknown device")
+    device = snapshot.to_dict() or {}
+    expires_at = device.get("expiresAt")
+    if isinstance(expires_at, datetime) and expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Device credential expired")
+    supplied = request.headers.get("authorization", "")
+    token = supplied[7:].strip() if supplied.lower().startswith("bearer ") else ""
+    expected = str(device.get("accessTokenHash", ""))
+    if not token or not expected or not hmac.compare_digest(
+        hashlib.sha256(token.encode("utf-8")).hexdigest(), expected
+    ):
+        raise HTTPException(status_code=401, detail="Invalid device credential")
+    return device_ref, device
 
 
 async def _json_body(request: Request) -> dict[str, Any]:

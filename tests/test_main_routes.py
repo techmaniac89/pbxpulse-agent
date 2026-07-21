@@ -68,6 +68,16 @@ class MainRouteStructureTest(unittest.TestCase):
 
         self.assertIn('payload["connection"]["pushRelayAgentId"]', source)
 
+    def test_relay_supports_scoped_app_push_registration(self) -> None:
+        source = Path("push_relay/app.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            '@app.post("/v1/agents/{agent_id}/devices/{device_id}/registration")',
+            source,
+        )
+        self.assertIn("_authenticate_relay_device(agent_id, device_id, request)", source)
+        self.assertIn('return {"delivered": True, "deviceId": device_id}', source)
+
     def test_paired_app_card_uses_customer_facing_device_details(self) -> None:
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 
