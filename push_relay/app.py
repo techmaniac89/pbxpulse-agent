@@ -544,6 +544,7 @@ async def remove_device(agent_id: str, request: Request) -> dict[str, str]:
 async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
     event, agent = await _authenticate_agent(agent_id, request, touch_presence=False)
     event_id = _bounded_identifier(event.get("id"), "id")
+    signal_id = _bounded_identifier(event.get("signalId", event_id), "signalId")
     title = _bounded_text(event.get("title"), "title", 256)
     body = _bounded_text(event.get("body"), "body", 2048)
     category = _bounded_text(event.get("category"), "category", 64)
@@ -568,13 +569,13 @@ async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
     devices = [_device_record(document) for document in
         db.collection("agents").document(agent_id).collection("devices").stream()]
     now = datetime.now(timezone.utc)
-    eligible_devices = [
+    eligible_devices = _unique_devices_by_token([
         device
         for device in devices
         if _device_wants_event(device, category, importance)
         and device.get("expiresAt", now) >= now
         and device.get("fcmToken")
-    ]
+    ])
     tokens = [str(device["fcmToken"]) for device in eligible_devices]
     if not tokens:
         return {"status": "accepted", "sent": 0}
@@ -583,12 +584,16 @@ async def publish_event(agent_id: str, request: Request) -> dict[str, Any]:
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),
         data={
-            "signalId": event_id,
+            "signalId": signal_id,
+            "notificationId": event_id,
             "siteId": agent["siteId"],
             "category": category,
             "importance": importance,
         },
-        android=messaging.AndroidConfig(priority="high"),
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(tag=event_id),
+        ),
     )
     try:
         response = messaging.send_each_for_multicast(message)
@@ -748,13 +753,13 @@ def _send_agent_status(agent_id: str, title: str, body: str) -> None:
     now = datetime.now(timezone.utc)
     devices = [_device_record(document) for document in
         db.collection("agents").document(agent_id).collection("devices").stream()]
-    eligible_devices = [
+    eligible_devices = _unique_devices_by_token([
         device
         for device in devices
         if device.get("meaningfulEnabled", True)
         and device.get("expiresAt", now) >= now
         and device.get("fcmToken")
-    ]
+    ])
     tokens = [
         str(device.get("fcmToken", ""))
         for device in eligible_devices
@@ -785,6 +790,16 @@ def _device_record(document: Any) -> dict[str, Any]:
     device = document.to_dict() or {}
     device["_documentId"] = document.id
     return device
+
+
+def _unique_devices_by_token(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Never send the same multicast message twice to one FCM token."""
+    unique: dict[str, dict[str, Any]] = {}
+    for device in devices:
+        token = str(device.get("fcmToken", ""))
+        if token:
+            unique[token] = device
+    return list(unique.values())
 
 
 def _authenticate_relay_device(

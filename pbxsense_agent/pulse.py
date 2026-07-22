@@ -266,6 +266,7 @@ class _EndpointSignalState:
     recovery_started_at: datetime | None = None
     episode_notified: bool = False
     signal_visible: bool = False
+    notification_id: str = ""
 
 
 class EndpointAvailabilitySignalTracker:
@@ -315,8 +316,14 @@ class EndpointAvailabilitySignalTracker:
                         # confirmation window. Never suppress it.
                         state.episode_notified = False
                         state.signal_visible = False
+                        state.notification_id = ""
                     elif state.outage_started_at is None:
                         state.outage_started_at = now
+                    if not state.notification_id:
+                        state.notification_id = (
+                            f"sig_endpoint_{extension}_unavailable_"
+                            f"{int(now.timestamp() * 1_000_000)}"
+                        )
 
                     if (
                         not state.episode_notified
@@ -339,6 +346,15 @@ class EndpointAvailabilitySignalTracker:
                     self._states.pop(extension, None)
 
         return visible
+
+    def notification_ids(self) -> dict[str, str]:
+        """Return the stable notification occurrence for each visible outage."""
+        with self._lock:
+            return {
+                extension: state.notification_id
+                for extension, state in self._states.items()
+                if state.signal_visible and state.notification_id
+            }
 
 
 class EndpointAggregateTipTracker:
@@ -441,6 +457,7 @@ def build_home_payload(
     moment_hours: int = 24,
     moment_events: list[dict] | None = None,
     endpoint_unavailability_signals: set[str] | None = None,
+    endpoint_notification_ids: dict[str, str] | None = None,
     endpoint_last_active: dict[str, datetime] | None = None,
 ) -> dict:
     now = now or _now(timezone_name)
@@ -500,6 +517,7 @@ def build_home_payload(
         moment_hours,
         moment_events or [],
         endpoint_unavailability_signals,
+        endpoint_notification_ids or {},
     )
     signals.extend(
         build_engine_signals(
@@ -751,6 +769,7 @@ def _build_signals(
     moment_hours: int,
     moment_events: list[dict],
     endpoint_unavailability_signals: set[str] | None,
+    endpoint_notification_ids: dict[str, str],
 ) -> list[dict]:
     signals: list[dict] = []
 
@@ -869,6 +888,10 @@ def _build_signals(
             signals.append(
                 {
                     "id": f"sig_endpoint_{endpoint.extension}_unavailable",
+                    "notificationId": endpoint_notification_ids.get(
+                        endpoint.extension,
+                        f"sig_endpoint_{endpoint.extension}_unavailable",
+                    ),
                     "kind": "endpoint_unavailable",
                     "category": "health",
                     "importance": "attention",
@@ -1223,7 +1246,7 @@ def _looks_like_extension(value: str, extension: str) -> bool:
 def _quiet_now(snapshot: AmiSnapshot) -> dict:
     if snapshot.reachable:
         return {
-            "title": "The office is quiet.",
+            "title": "No calls right now.",
             "body": "The PBX is reachable.",
             "timeLabel": "Now",
             "isActive": False,

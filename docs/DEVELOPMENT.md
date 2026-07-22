@@ -99,6 +99,15 @@ client, and the relay publisher consume that cached state. Do not introduce PBX
 polling inside request or WebSocket handlers; doing so can reorder transitions
 and makes connector load proportional to connected clients.
 
+`/live` emits a small `heartbeat` event every ten seconds when no PBX data has
+changed. The app uses it only as transport liveness; without it, a quiet PBX can
+look stale even while WebSocket ping/pong remains healthy.
+
+Feed Signal IDs stay stable for UI updates. Interruptive outage Signals also
+carry an occurrence-scoped `notificationId`. Relay idempotency and Android
+notification tags use that occurrence so local and FCM copies collapse while a
+genuine later outage can notify again.
+
 The relay presence heartbeat is a separate task. It must remain independent of
 PBX snapshot, history, and signal failures so a slow connector cannot create a
 false Agent-lost notification.

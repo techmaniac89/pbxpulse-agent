@@ -69,6 +69,7 @@ LOCAL_WEB_COOKIE = "pbxsense_agent_local_web"
 # every HTML visit. Token rotation or clearing browser site data revokes it.
 LOCAL_WEB_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10
 LIVE_INTERVAL_SECONDS = 1
+LIVE_HEARTBEAT_INTERVAL_SECONDS = 10
 SNAPSHOT_POLL_INTERVAL_SECONDS = settings.snapshot_poll_seconds
 HISTORY_POLL_INTERVAL_SECONDS = settings.history_poll_seconds
 RELAY_PUBLISH_INTERVAL_SECONDS = 5
@@ -77,7 +78,7 @@ _relay_publish_task: asyncio.Task[None] | None = None
 _relay_heartbeat_task: asyncio.Task[None] | None = None
 _internet_relay_task: asyncio.Task[None] | None = None
 _snapshot_lock = threading.Lock()
-_cached_home_state: tuple[object, object, list[dict], list[dict], bool, dict] | None = None
+_cached_home_state: tuple[object, object, list[dict], set[str], dict[str, str], bool, dict] | None = None
 _cached_history: tuple[list, list, list] = ([], [], [])
 _history_refreshed_at = 0.0
 
@@ -860,6 +861,7 @@ async def live(websocket: WebSocket) -> None:
             moment_hours=moment_hours,
         )
         await websocket.send_json({"type": "home_snapshot", "data": previous_payload})
+        last_message_at = time.monotonic()
         while True:
             await asyncio.sleep(LIVE_INTERVAL_SECONDS)
             current_payload = await asyncio.to_thread(
@@ -871,12 +873,18 @@ async def live(websocket: WebSocket) -> None:
                 if events:
                     for event in events:
                         await websocket.send_json(event)
+                    last_message_at = time.monotonic()
                 else:
                     await websocket.send_json({"type": "home_snapshot", "data": current_payload})
+                    last_message_at = time.monotonic()
                 previous_payload = current_payload
                 continue
             for event in home_live_events(previous_payload, current_payload):
                 await websocket.send_json(event)
+                last_message_at = time.monotonic()
+            if time.monotonic() - last_message_at >= LIVE_HEARTBEAT_INTERVAL_SECONDS:
+                await websocket.send_json({"type": "heartbeat", "data": {}})
+                last_message_at = time.monotonic()
             previous_payload = current_payload
     except WebSocketDisconnect:
         return
@@ -941,6 +949,7 @@ def _refresh_home_state_locked() -> tuple:
         snapshot,
         observed_at,
     )
+    endpoint_notification_ids = endpoint_availability_tracker.notification_ids()
     show_aggregate_tip = endpoint_aggregate_tip_tracker.observe(snapshot, observed_at)
     endpoint_last_active = endpoint_last_active_tracker.observe(snapshot, observed_at)
     _cached_home_state = (
@@ -948,6 +957,7 @@ def _refresh_home_state_locked() -> tuple:
         observed_at,
         moment_events,
         endpoint_unavailability_signals,
+        endpoint_notification_ids,
         show_aggregate_tip,
         endpoint_last_active,
     )
@@ -955,7 +965,7 @@ def _refresh_home_state_locked() -> tuple:
 
 
 def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
-    snapshot, observed_at, moment_events, endpoint_signals, show_aggregate_tip, endpoint_last_active = state
+    snapshot, observed_at, moment_events, endpoint_signals, endpoint_notification_ids, show_aggregate_tip, endpoint_last_active = state
     payload = build_home_payload(
         snapshot,
         display_name=settings.display_name,
@@ -968,6 +978,7 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
         moment_hours=moment_hours,
         moment_events=moment_events,
         endpoint_unavailability_signals=endpoint_signals,
+        endpoint_notification_ids=endpoint_notification_ids,
         endpoint_last_active=endpoint_last_active,
     )
     if not show_aggregate_tip:

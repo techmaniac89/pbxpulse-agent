@@ -119,6 +119,20 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn("_authenticate_relay_device(agent_id, device_id, request)", source)
         self.assertIn('return {"delivered": True, "deviceId": device_id}', source)
 
+    def test_push_relay_deduplicates_tokens_and_tags_notification_episodes(self) -> None:
+        source = Path("push_relay/app.py").read_text(encoding="utf-8")
+
+        self.assertIn("def _unique_devices_by_token", source)
+        self.assertGreaterEqual(source.count("_unique_devices_by_token(["), 2)
+        self.assertIn('"notificationId": event_id', source)
+        self.assertIn("messaging.AndroidNotification(tag=event_id)", source)
+
+    def test_live_websocket_sends_quiet_heartbeats(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("LIVE_HEARTBEAT_INTERVAL_SECONDS = 10", source)
+        self.assertIn('{"type": "heartbeat", "data": {}}', source)
+
     def test_paired_app_card_uses_customer_facing_device_details(self) -> None:
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 

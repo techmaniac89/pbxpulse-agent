@@ -527,7 +527,7 @@ class PulseMappingTest(unittest.TestCase):
     def test_live_events_describe_changed_home_snapshot_parts(self) -> None:
         previous = {
             "connection": {"kind": "local", "label": "Connected"},
-            "now": {"title": "The office is quiet.", "isActive": False},
+            "now": {"title": "No calls right now.", "isActive": False},
             "signals": [
                 {
                     "id": "sig_old",
@@ -803,8 +803,35 @@ class PulseMappingTest(unittest.TestCase):
         )
 
         self.assertEqual(tracker.observe(unavailable, now), {"200"})
+        first_notification_id = tracker.notification_ids()["200"]
         self.assertEqual(tracker.observe(reachable, now + timedelta(seconds=1)), set())
         self.assertEqual(tracker.observe(unavailable, now + timedelta(seconds=2)), {"200"})
+        self.assertNotEqual(
+            tracker.notification_ids()["200"],
+            first_notification_id,
+        )
+
+    def test_unavailable_signal_exposes_episode_notification_id(self) -> None:
+        tracker = EndpointAvailabilitySignalTracker()
+        now = datetime(2026, 7, 12, 10, tzinfo=ZoneInfo("Europe/Athens"))
+        snapshot = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="200", device_state="Unavailable")],
+        )
+        visible = tracker.observe(snapshot, now)
+        notification_ids = tracker.notification_ids()
+        payload = build_home_payload(
+            snapshot,
+            display_name="Office PBX",
+            extension_names={},
+            now=now,
+            endpoint_unavailability_signals=visible,
+            endpoint_notification_ids=notification_ids,
+        )
+
+        signal = next(item for item in payload["signals"] if item["kind"] == "endpoint_unavailable")
+        self.assertEqual(signal["notificationId"], notification_ids["200"])
 
     def test_endpoint_label_is_used_before_manual_extension_name(self) -> None:
         payload = build_home_payload(
@@ -1270,7 +1297,7 @@ class PulseMappingTest(unittest.TestCase):
             now=datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens")),
         )
 
-        self.assertEqual(payload["now"]["title"], "The office is quiet.")
+        self.assertEqual(payload["now"]["title"], "No calls right now.")
         self.assertIn("Linphone missed Support.", [call["title"] for call in payload["calls"]])
 
     def test_call_history_creates_first_answered_call_moment(self) -> None:

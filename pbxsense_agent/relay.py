@@ -290,7 +290,8 @@ class AgentRelay:
                 self._queue(
                     "events",
                     {
-                        "id": signal_id,
+                        "id": str(signal.get("notificationId", signal_id)),
+                        "signalId": signal_id,
                         "title": str(signal.get("title", "PBXSense Signal")),
                         "body": str(signal.get("body", signal.get("timeLabel", ""))),
                         "category": str(signal.get("category", "activity")),
@@ -545,7 +546,12 @@ def _should_relay(signal: dict[str, object]) -> bool:
 
 
 def _fingerprint(signal: dict[str, object]) -> str:
-    return json.dumps(signal, sort_keys=True, separators=(",", ":"), default=str)
+    semantic_signal = dict(signal)
+    # An Agent restart can reconstruct a new occurrence token for an outage
+    # that never ended. Keep durable relay dedupe based on signal semantics;
+    # the token is used only after the stable signal leaves and reappears.
+    semantic_signal.pop("notificationId", None)
+    return json.dumps(semantic_signal, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _secure_snapshot_projection(snapshot: dict[str, object]) -> dict[str, object]:

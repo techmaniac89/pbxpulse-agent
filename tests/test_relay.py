@@ -302,6 +302,32 @@ class RelayTest(unittest.TestCase):
             )
             self.assertEqual(len(relay.requests), 1)
 
+    def test_relay_uses_episode_id_but_ignores_it_for_active_dedupe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _RecordingRelay(str(Path(directory) / "identity.json"))
+            base = {
+                "id": "sig_endpoint_200_unavailable",
+                "kind": "endpoint_unavailable",
+                "state": "active",
+                "category": "health",
+                "importance": "attention",
+                "title": "Phone looks unavailable.",
+                "body": "The phone is offline.",
+            }
+            relay.observe([{**base, "notificationId": "episode_one"}])
+            relay.observe([{**base, "notificationId": "episode_restart"}])
+
+            events = [payload for path, payload, _ in relay.requests if path.endswith("/events")]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["id"], "episode_one")
+            self.assertEqual(events[0]["signalId"], base["id"])
+
+            relay.observe([])
+            relay.observe([{**base, "notificationId": "episode_two"}])
+            events = [payload for path, payload, _ in relay.requests if path.endswith("/events")]
+            self.assertEqual(len(events), 2)
+            self.assertEqual(events[1]["id"], "episode_two")
+
     def test_live_call_activity_stays_in_feed_without_push_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = _RecordingRelay(str(Path(directory) / "identity.json"))
