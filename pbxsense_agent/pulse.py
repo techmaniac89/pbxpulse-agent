@@ -78,12 +78,22 @@ class _MomentState:
 class ActivityTracker:
     """Keeps short-lived, event-based Activity between PBX snapshots."""
 
-    def __init__(self, *, keep_for: timedelta = timedelta(hours=24)) -> None:
+    def __init__(
+        self,
+        *,
+        keep_for: timedelta = timedelta(hours=24),
+        phone_outage_confirmation: timedelta = timedelta(seconds=5),
+        phone_recovery_confirmation: timedelta = timedelta(seconds=5),
+    ) -> None:
         self._keep_for = keep_for
+        self._phone_outage_confirmation = phone_outage_confirmation
+        self._phone_recovery_confirmation = phone_recovery_confirmation
         self._previous: _MomentState | None = None
         self._events: list[dict] = []
         self._reported_phone_recoveries: dict[str, datetime] = {}
         self._outstanding_phone_outages: set[str] = set()
+        self._phone_outage_started_at: dict[str, datetime] = {}
+        self._phone_recovery_started_at: dict[str, datetime] = {}
         self._busy_queues: dict[str, frozenset[str]] = {}
         self._recovered_trunks_waiting_for_call: set[str] = set()
         self._lock = Lock()
@@ -92,14 +102,20 @@ class ActivityTracker:
         current = _moment_state(snapshot)
         with self._lock:
             if current.reachable:
-                # A fresh outage starts a new recovery episode. Re-arm these
-                # extensions before comparing snapshots so their next return
-                # can produce Activity even when they recovered earlier today.
+                self._phone_outage_started_at = {
+                    extension: started_at
+                    for extension, started_at in self._phone_outage_started_at.items()
+                    if extension in current.unavailable_extensions
+                }
                 for extension in current.unavailable_extensions:
-                    self._reported_phone_recoveries.pop(extension, None)
-                self._outstanding_phone_outages.update(
-                    current.unavailable_extensions
-                )
+                    started_at = self._phone_outage_started_at.setdefault(
+                        extension, now
+                    )
+                    if now - started_at >= self._phone_outage_confirmation:
+                        # A confirmed fresh outage starts a new recovery episode.
+                        self._reported_phone_recoveries.pop(extension, None)
+                        self._phone_recovery_started_at.pop(extension, None)
+                        self._outstanding_phone_outages.add(extension)
                 if self._previous is not None:
                     self._record_transitions(self._previous, current, now)
                 self._events = [
@@ -186,13 +202,24 @@ class ActivityTracker:
             & current.monitored_extensions
             - current.unavailable_extensions
         )
+        self._phone_recovery_started_at = {
+            extension: started_at
+            for extension, started_at in self._phone_recovery_started_at.items()
+            if extension in recovered
+        }
+        for extension in recovered:
+            self._phone_recovery_started_at.setdefault(extension, now)
         new_recoveries = {
             extension
             for extension in recovered
             if extension not in self._reported_phone_recoveries
+            and now - self._phone_recovery_started_at[extension]
+            >= self._phone_recovery_confirmation
         }
         if new_recoveries:
             self._outstanding_phone_outages.difference_update(new_recoveries)
+            for extension in new_recoveries:
+                self._phone_recovery_started_at.pop(extension, None)
             self._reported_phone_recoveries.update(
                 {extension: now for extension in new_recoveries}
             )
@@ -275,11 +302,13 @@ class EndpointAvailabilitySignalTracker:
     def __init__(
         self,
         *,
-        outage_confirmation: timedelta = timedelta(0),
-        recovery_confirmation: timedelta = timedelta(minutes=2),
+        outage_confirmation: timedelta = timedelta(seconds=5),
+        recovery_confirmation: timedelta = timedelta(seconds=5),
+        role: str = "extension",
     ) -> None:
         self._outage_confirmation = outage_confirmation
         self._recovery_confirmation = recovery_confirmation
+        self._role = role
         self._states: dict[str, _EndpointSignalState] = {}
         self._lock = Lock()
 
@@ -296,7 +325,7 @@ class EndpointAvailabilitySignalTracker:
         endpoints = {
             endpoint.extension: endpoint
             for endpoint in snapshot.endpoints
-            if endpoint.role != "trunk"
+            if (endpoint.role == "trunk") == (self._role == "trunk")
         }
         visible: set[str] = set()
         with self._lock:
@@ -457,6 +486,7 @@ def build_home_payload(
     moment_hours: int = 24,
     moment_events: list[dict] | None = None,
     endpoint_unavailability_signals: set[str] | None = None,
+    trunk_unavailability_signals: set[str] | None = None,
     endpoint_notification_ids: dict[str, str] | None = None,
     endpoint_last_active: dict[str, datetime] | None = None,
 ) -> dict:
@@ -518,6 +548,7 @@ def build_home_payload(
         moment_events or [],
         endpoint_unavailability_signals,
         endpoint_notification_ids or {},
+        trunk_unavailability_signals,
     )
     signals.extend(
         build_engine_signals(
@@ -770,6 +801,7 @@ def _build_signals(
     moment_events: list[dict],
     endpoint_unavailability_signals: set[str] | None,
     endpoint_notification_ids: dict[str, str],
+    trunk_unavailability_signals: set[str] | None,
 ) -> list[dict]:
     signals: list[dict] = []
 
@@ -876,6 +908,12 @@ def _build_signals(
     for endpoint in snapshot.endpoints:
         if endpoint.role == "trunk":
             if endpoint.extension in active_trunk_endpoints:
+                continue
+            if (
+                _endpoint_unavailable(endpoint)
+                and trunk_unavailability_signals is not None
+                and endpoint.extension not in trunk_unavailability_signals
+            ):
                 continue
             signals.extend(_trunk_signals(endpoint, extension_names))
             continue

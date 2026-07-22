@@ -28,6 +28,9 @@ class AgentSettings:
     relay_identity_path: str = "/var/lib/pbxsense-agent/relay_identity.json"
     relay_timeout_seconds: float = 5
     quality_frequency_seconds: int = 180
+    endpoint_outage_confirmation_seconds: float = 5
+    trunk_outage_confirmation_seconds: float = 5
+    endpoint_recovery_confirmation_seconds: float = 5
     asterisk_recordings_path: str = "/var/spool/asterisk/monitor"
     asterisk_security_log_path: str = "/var/log/asterisk/security"
     freeswitch_recordings_path: str = ""
@@ -125,6 +128,15 @@ class AgentSettings:
             ).strip(),
             relay_timeout_seconds=_env_float("PBXSENSE_RELAY_TIMEOUT", 5),
             quality_frequency_seconds=_env_int("PBXSENSE_QUALITY_FREQUENCY_SECONDS", 180),
+            endpoint_outage_confirmation_seconds=max(
+                0, _env_float("PBXSENSE_ENDPOINT_OUTAGE_CONFIRMATION_SECONDS", 5)
+            ),
+            trunk_outage_confirmation_seconds=max(
+                0, _env_float("PBXSENSE_TRUNK_OUTAGE_CONFIRMATION_SECONDS", 5)
+            ),
+            endpoint_recovery_confirmation_seconds=max(
+                0, _env_float("PBXSENSE_ENDPOINT_RECOVERY_CONFIRMATION_SECONDS", 5)
+            ),
             asterisk_recordings_path=os.getenv(
                 "ASTERISK_RECORDINGS_PATH",
                 "/var/spool/asterisk/monitor",

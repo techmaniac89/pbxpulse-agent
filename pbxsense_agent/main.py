@@ -44,8 +44,29 @@ from .version import AGENT_RELEASE_CHANNEL, AGENT_VERSION
 
 settings = AgentSettings.from_env()
 connector = connector_for_settings(settings)
-activity_tracker = ActivityTracker()
-endpoint_availability_tracker = EndpointAvailabilitySignalTracker()
+activity_tracker = ActivityTracker(
+    phone_outage_confirmation=timedelta(
+        seconds=settings.endpoint_outage_confirmation_seconds
+    ),
+    phone_recovery_confirmation=timedelta(
+        seconds=settings.endpoint_recovery_confirmation_seconds
+    )
+)
+endpoint_availability_tracker = EndpointAvailabilitySignalTracker(
+    outage_confirmation=timedelta(
+        seconds=settings.endpoint_outage_confirmation_seconds
+    ),
+    recovery_confirmation=timedelta(
+        seconds=settings.endpoint_recovery_confirmation_seconds
+    ),
+)
+trunk_availability_tracker = EndpointAvailabilitySignalTracker(
+    outage_confirmation=timedelta(
+        seconds=settings.trunk_outage_confirmation_seconds
+    ),
+    recovery_confirmation=timedelta(0),
+    role="trunk",
+)
 endpoint_aggregate_tip_tracker = EndpointAggregateTipTracker(
     timedelta(seconds=max(0, settings.quality_frequency_seconds))
 )
@@ -78,7 +99,7 @@ _relay_publish_task: asyncio.Task[None] | None = None
 _relay_heartbeat_task: asyncio.Task[None] | None = None
 _internet_relay_task: asyncio.Task[None] | None = None
 _snapshot_lock = threading.Lock()
-_cached_home_state: tuple[object, object, list[dict], set[str], dict[str, str], bool, dict] | None = None
+_cached_home_state: tuple | None = None
 _cached_history: tuple[list, list, list] = ([], [], [])
 _history_refreshed_at = 0.0
 
@@ -950,6 +971,10 @@ def _refresh_home_state_locked() -> tuple:
         observed_at,
     )
     endpoint_notification_ids = endpoint_availability_tracker.notification_ids()
+    trunk_unavailability_signals = trunk_availability_tracker.observe(
+        snapshot,
+        observed_at,
+    )
     show_aggregate_tip = endpoint_aggregate_tip_tracker.observe(snapshot, observed_at)
     endpoint_last_active = endpoint_last_active_tracker.observe(snapshot, observed_at)
     _cached_home_state = (
@@ -958,6 +983,7 @@ def _refresh_home_state_locked() -> tuple:
         moment_events,
         endpoint_unavailability_signals,
         endpoint_notification_ids,
+        trunk_unavailability_signals,
         show_aggregate_tip,
         endpoint_last_active,
     )
@@ -965,7 +991,7 @@ def _refresh_home_state_locked() -> tuple:
 
 
 def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
-    snapshot, observed_at, moment_events, endpoint_signals, endpoint_notification_ids, show_aggregate_tip, endpoint_last_active = state
+    snapshot, observed_at, moment_events, endpoint_signals, endpoint_notification_ids, trunk_signals, show_aggregate_tip, endpoint_last_active = state
     payload = build_home_payload(
         snapshot,
         display_name=settings.display_name,
@@ -979,6 +1005,7 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
         moment_events=moment_events,
         endpoint_unavailability_signals=endpoint_signals,
         endpoint_notification_ids=endpoint_notification_ids,
+        trunk_unavailability_signals=trunk_signals,
         endpoint_last_active=endpoint_last_active,
     )
     if not show_aggregate_tip:

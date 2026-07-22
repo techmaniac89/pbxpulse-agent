@@ -24,7 +24,10 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_SNAPSHOT_POLL_SECONDS` | `1` | Central live PBX polling cadence, clamped to at least 0.5 seconds. |
 | `PBXSENSE_HISTORY_POLL_SECONDS` | `30` | CDR, voicemail, recording, and security-history refresh cadence, clamped to at least 5 seconds. |
 | `PBXSENSE_ENDPOINT_ACTIVITY_PATH` | `/var/lib/pbxsense-agent/endpoint_activity.json` | Persistent last-active timestamps captured when monitored devices transition offline. Keep this inside the Agent data volume. |
-| `PBXSENSE_QUALITY_FREQUENCY_SECONDS` | `180` | Evidence window before aggregate availability Tips are emitted. Immediate per-device Health Signals do not wait for it. |
+| `PBXSENSE_ENDPOINT_OUTAGE_CONFIRMATION_SECONDS` | `5` | Continuous unavailable period required before a per-device Health Signal and notification. |
+| `PBXSENSE_ENDPOINT_RECOVERY_CONFIRMATION_SECONDS` | `5` | Continuous reachable period required before the recovery Activity notification. |
+| `PBXSENSE_TRUNK_OUTAGE_CONFIRMATION_SECONDS` | `5` | Continuous unavailable period required before a trunk Health Signal and notification. |
+| `PBXSENSE_QUALITY_FREQUENCY_SECONDS` | `180` | Evidence window before aggregate availability Tips are emitted. |
 | `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Production URLs must use HTTPS; plain HTTP is accepted only for localhost development. Leave empty only for deliberately local-only installs. |
 | `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
 | `PBXSENSE_RELAY_TIMEOUT` | `5` | Outbound relay HTTP timeout in seconds. |

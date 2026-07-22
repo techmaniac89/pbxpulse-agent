@@ -789,7 +789,9 @@ class PulseMappingTest(unittest.TestCase):
         )
 
     def test_new_outage_is_not_suppressed_during_recovery_window(self) -> None:
-        tracker = EndpointAvailabilitySignalTracker()
+        tracker = EndpointAvailabilitySignalTracker(
+            outage_confirmation=timedelta(0)
+        )
         now = datetime(2026, 7, 12, 10, tzinfo=ZoneInfo("Europe/Athens"))
         unavailable = AmiSnapshot(
             reachable=True,
@@ -812,7 +814,9 @@ class PulseMappingTest(unittest.TestCase):
         )
 
     def test_unavailable_signal_exposes_episode_notification_id(self) -> None:
-        tracker = EndpointAvailabilitySignalTracker()
+        tracker = EndpointAvailabilitySignalTracker(
+            outage_confirmation=timedelta(0)
+        )
         now = datetime(2026, 7, 12, 10, tzinfo=ZoneInfo("Europe/Athens"))
         snapshot = AmiSnapshot(
             reachable=True,
@@ -832,6 +836,47 @@ class PulseMappingTest(unittest.TestCase):
 
         signal = next(item for item in payload["signals"] if item["kind"] == "endpoint_unavailable")
         self.assertEqual(signal["notificationId"], notification_ids["200"])
+
+    def test_default_phone_outage_requires_five_continuous_seconds(self) -> None:
+        tracker = EndpointAvailabilitySignalTracker()
+        now = datetime(2026, 7, 12, 10, tzinfo=ZoneInfo("Europe/Athens"))
+        unavailable = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="200", device_state="Unavailable")],
+        )
+
+        self.assertEqual(tracker.observe(unavailable, now), set())
+        self.assertEqual(
+            tracker.observe(unavailable, now + timedelta(seconds=4)), set()
+        )
+        self.assertEqual(
+            tracker.observe(unavailable, now + timedelta(seconds=5)), {"200"}
+        )
+
+    def test_trunk_outage_requires_five_continuous_seconds(self) -> None:
+        tracker = EndpointAvailabilitySignalTracker(role="trunk")
+        now = datetime(2026, 7, 12, 10, tzinfo=ZoneInfo("Europe/Athens"))
+        unavailable = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[
+                AmiEndpoint(
+                    extension="trunk-main",
+                    device_state="Unavailable",
+                    role="trunk",
+                )
+            ],
+        )
+
+        self.assertEqual(tracker.observe(unavailable, now), set())
+        self.assertEqual(
+            tracker.observe(unavailable, now + timedelta(seconds=4)), set()
+        )
+        self.assertEqual(
+            tracker.observe(unavailable, now + timedelta(seconds=5)),
+            {"trunk-main"},
+        )
 
     def test_endpoint_label_is_used_before_manual_extension_name(self) -> None:
         payload = build_home_payload(
@@ -1416,7 +1461,10 @@ class PulseMappingTest(unittest.TestCase):
 
     def test_activity_tracker_emits_real_pbx_transitions(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
-        tracker = ActivityTracker()
+        tracker = ActivityTracker(
+            phone_outage_confirmation=timedelta(0),
+            phone_recovery_confirmation=timedelta(0),
+        )
         active = AmiChannel(
             channel="PJSIP/101-00000042",
             extension="101",
@@ -1466,7 +1514,10 @@ class PulseMappingTest(unittest.TestCase):
 
     def test_activity_tracker_rearms_recovery_after_a_new_outage(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
-        tracker = ActivityTracker()
+        tracker = ActivityTracker(
+            phone_outage_confirmation=timedelta(0),
+            phone_recovery_confirmation=timedelta(0),
+        )
         active = AmiChannel(
             channel="PJSIP/101-00000042",
             extension="101",
@@ -1522,7 +1573,10 @@ class PulseMappingTest(unittest.TestCase):
 
     def test_activity_tracker_keeps_last_healthy_state_through_pbx_outage(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
-        tracker = ActivityTracker()
+        tracker = ActivityTracker(
+            phone_outage_confirmation=timedelta(0),
+            phone_recovery_confirmation=timedelta(0),
+        )
         tracker.observe(
             AmiSnapshot(
                 reachable=True,
@@ -1551,7 +1605,10 @@ class PulseMappingTest(unittest.TestCase):
 
     def test_activity_tracker_recognizes_unregistered_phone_recovery(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
-        tracker = ActivityTracker()
+        tracker = ActivityTracker(
+            phone_outage_confirmation=timedelta(0),
+            phone_recovery_confirmation=timedelta(0),
+        )
         offline_snapshot = AmiSnapshot(
             reachable=True,
             agent_version="test",
@@ -1584,9 +1641,56 @@ class PulseMappingTest(unittest.TestCase):
             )
         )
 
-    def test_all_phones_recovered_waits_for_every_offline_phone_to_reappear(self) -> None:
+    def test_default_phone_recovery_requires_five_continuous_seconds(self) -> None:
         now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
         tracker = ActivityTracker()
+        offline = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="101", device_state="Unavailable")],
+        )
+        online = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="101", device_state="Reachable")],
+        )
+
+        tracker.observe(offline, now)
+        tracker.observe(offline, now + timedelta(seconds=5))
+        self.assertEqual(tracker.observe(online, now + timedelta(seconds=6)), [])
+        self.assertEqual(tracker.observe(online, now + timedelta(seconds=10)), [])
+        events = tracker.observe(online, now + timedelta(seconds=11))
+
+        self.assertEqual(
+            [event["kind"] for event in events],
+            ["pbx_phone_recovered_activity"],
+        )
+
+    def test_transient_phone_outage_produces_no_recovery_activity(self) -> None:
+        now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
+        tracker = ActivityTracker()
+        offline = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="101", device_state="Unavailable")],
+        )
+        online = AmiSnapshot(
+            reachable=True,
+            agent_version="test",
+            endpoints=[AmiEndpoint(extension="101", device_state="Reachable")],
+        )
+
+        tracker.observe(offline, now)
+        tracker.observe(offline, now + timedelta(seconds=2))
+        self.assertEqual(tracker.observe(online, now + timedelta(seconds=3)), [])
+        self.assertEqual(tracker.observe(online, now + timedelta(seconds=10)), [])
+
+    def test_all_phones_recovered_waits_for_every_offline_phone_to_reappear(self) -> None:
+        now = datetime(2026, 6, 26, 20, tzinfo=ZoneInfo("Europe/Athens"))
+        tracker = ActivityTracker(
+            phone_outage_confirmation=timedelta(0),
+            phone_recovery_confirmation=timedelta(0),
+        )
         tracker.observe(
             AmiSnapshot(reachable=True, agent_version="test", endpoints=[
                 AmiEndpoint(extension="101", device_state="Unavailable"),
