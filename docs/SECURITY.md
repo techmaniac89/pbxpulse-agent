@@ -26,7 +26,7 @@ in platform secure storage. The Agent receives only that app's public key and
 creates a separate AES-256-GCM envelope using an ephemeral X25519 key and
 HKDF-SHA256. Agent identity, device identity, sequence, and creation time are
 authenticated as associated data. Relay data is rejected after 60 seconds on
-legacy envelope timing, or after 75 seconds when current Agent-heartbeat
+legacy envelope timing, or after 105 seconds when current Agent-heartbeat
 liveness is present. Recordings are removed before encryption. Diagnostics, recordings, and
 interactive PBX control remain local/VPN-only.
 

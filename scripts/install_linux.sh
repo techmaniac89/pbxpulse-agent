@@ -68,6 +68,7 @@ normalize_pbx_type() {
     grandstream|grandstreamucm|ucm|ucm6xxx|ucm62xx|ucm63xx|ucm6100|ucm6200|ucm6300|ucm6300a|ucm6300audio|ucm6510) printf '%s\n' "grandstream" ;;
     fs|freeswitch|fusionpbx) printf '%s\n' "freeswitch" ;;
     yeastar|yeastarpseries|pseries) printf '%s\n' "yeastar" ;;
+    cucm|ciscocucm|ciscounifiedcommunicationsmanager) printf '%s\n' "cucm" ;;
     mock) printf '%s\n' "mock" ;;
     *) printf '%s\n' "$1" ;;
   esac
@@ -229,7 +230,7 @@ choose_pbx_type() {
     [ "$has_asterisk" -eq 1 ] && echo "  - Asterisk files or commands found." >&2
     [ "$has_freeswitch" -eq 1 ] && echo "  - FreeSWITCH files or commands found." >&2
     [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && echo "  - No local PBX files found; using Asterisk defaults." >&2
-    printf "PBX type: asterisk, grandstream, freeswitch, yeastar, or mock [%s]: " "$detected" >&2
+    printf "PBX type: asterisk, grandstream, freeswitch, yeastar, cucm, or mock [%s]: " "$detected" >&2
     read -r answer
     if [ -n "$answer" ]; then
       detected="$answer"
@@ -312,6 +313,20 @@ configure_yeastar_env() {
   prompt_value YEASTAR_VERIFY_TLS "Verify Yeastar TLS certificate (true/false)" "${YEASTAR_VERIFY_TLS:-true}"
 }
 
+configure_cucm_env() {
+  echo "Configuring Cisco Unified Communications Manager settings in $ENV_FILE"
+  set_env_value PBXSENSE_PBX_TYPE "cucm"
+  set_env_value PBXSENSE_AGENT_MODE "cucm"
+  prompt_value PBXSENSE_DISPLAY_NAME "Display name" "Cisco Unified Communications Manager"
+  prompt_value CUCM_HOST "CUCM Publisher host" "${CUCM_HOST:-}"
+  prompt_value CUCM_USERNAME "CUCM read-only application user" "${CUCM_USERNAME:-}"
+  prompt_secret CUCM_PASSWORD "CUCM application-user password" "${CUCM_PASSWORD:-}"
+  prompt_value CUCM_AXL_VERSION "CUCM AXL schema version" "${CUCM_AXL_VERSION:-15.0}"
+  prompt_value CUCM_VERIFY_TLS "Verify CUCM TLS certificate (true/false)" "${CUCM_VERIFY_TLS:-true}"
+  prompt_value CUCM_CDR_PATH "CUCM CDR inbox" "${CUCM_CDR_PATH:-/var/lib/pbxsense-agent/cucm/cdr}"
+  prompt_value CUCM_CMR_PATH "CUCM CMR inbox" "${CUCM_CMR_PATH:-/var/lib/pbxsense-agent/cucm/cmr}"
+}
+
 configure_mock_env() {
   echo "Configuring mock connector settings in $ENV_FILE"
   set_env_value PBXSENSE_PBX_TYPE "mock"
@@ -330,6 +345,7 @@ configure_agent_env() {
     grandstream) configure_grandstream_env ;;
     freeswitch) configure_freeswitch_env ;;
     yeastar) configure_yeastar_env ;;
+    cucm) configure_cucm_env ;;
     mock) configure_mock_env ;;
     *) configure_asterisk_env ;;
   esac
@@ -349,7 +365,7 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/pbxsense-agent --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-mkdir -p "$INSTALL_DIR" /var/lib/pbxsense-agent /var/log/pbxsense-agent
+mkdir -p "$INSTALL_DIR" /var/lib/pbxsense-agent/cucm/cdr /var/lib/pbxsense-agent/cucm/cmr /var/log/pbxsense-agent
 
 for entry in pbxsense_agent scripts docs requirements.txt .env.example CODEX.md README.md SECURITY.md Dockerfile docker-compose.yml docker-compose.lan.yml docker-compose.parent-example.yml; do
   if [ -e "$SOURCE_DIR/$entry" ]; then

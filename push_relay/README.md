@@ -84,10 +84,10 @@ code.
 
 Create a Cloud Scheduler job that POSTs to
 `/v1/internal/sweep-agent-heartbeats` once per minute with the
-`X-PBXSense-Admin-Token` header. Agents send a heartbeat every 15 seconds; the
-relay marks one as lost after 60 seconds without one, then sends a recovery
+`X-PBXSense-Admin-Token` header. Agents send a heartbeat every 30 seconds; the
+relay marks one as lost after 90 seconds without one, then sends a recovery
 notification on the next heartbeat. Because Cloud Scheduler runs once a minute,
-loss delivery can occur up to one additional minute after that 60-second limit.
+loss delivery can occur up to one additional minute after that 90-second limit.
 
 The relay is publicly reachable only so Agents behind customer NAT can post to
 it. Every Agent request is Ed25519-signed and every administrative request
@@ -104,7 +104,7 @@ service see only encrypted snapshot bytes and routing metadata.
 
 The snapshot API deliberately excludes recordings and does not expose
 diagnostics or PBX control. Envelopes carry authenticated sequence and creation
-metadata. Current apps allow 75 seconds from Agent heartbeat liveness, while
+metadata. Current apps allow 105 seconds from Agent heartbeat liveness, while
 older envelope-only responses retain a 60-second limit. Older apps can
 still claim an activation for push delivery without requesting an encryption
 key, which permits staged rollout of the Agent, relay, and app. Every newly

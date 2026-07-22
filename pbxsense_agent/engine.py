@@ -25,6 +25,7 @@ def build_engine_signals(
     )
     signals.extend(_call_mix_insights(recent_calls, voicemails, now))
     signals.extend(_rhythm_insights(recent_calls, now))
+    signals.extend(_call_quality_insights(recent_calls))
     signals.extend(_operational_insights(endpoints, queues, recent_calls, extension_names, now))
     signals.extend(_operational_moments(queues, recent_calls, voicemails, now))
     signals.extend(_missed_rate_recommendations(recent_calls, now))
@@ -505,6 +506,48 @@ def _security_signals(
         )
 
     return signals
+
+
+def _call_quality_insights(recent_calls: list[CdrCall]) -> list[dict]:
+    measured = [
+        call for call in recent_calls
+        if call.packet_loss_percent is not None
+        or call.jitter_ms is not None
+        or call.latency_ms is not None
+    ]
+    degraded = [
+        call for call in measured
+        if (call.packet_loss_percent or 0) >= 2
+        or (call.jitter_ms or 0) >= 30
+        or (call.latency_ms or 0) >= 150
+    ]
+    if not degraded:
+        return []
+    worst_loss = max((call.packet_loss_percent or 0) for call in degraded)
+    worst_jitter = max((call.jitter_ms or 0) for call in degraded)
+    worst_latency = max((call.latency_ms or 0) for call in degraded)
+    return [{
+        "id": "sig_insight_cucm_call_quality",
+        "kind": "call_quality_degradation",
+        "category": "insight",
+        "importance": "attention",
+        "state": "active",
+        "title": "Recent calls show quality degradation.",
+        "body": "CUCM diagnostic records found packet loss, jitter, or latency worth reviewing.",
+        "timeLabel": "Recent history",
+        "actionLabel": None,
+        "why": [
+            f"{len(degraded)} of {len(measured)} calls with CMR evidence crossed a quality threshold.",
+            "PBXSense checks for at least 2% packet loss, 30 ms jitter, or 150 ms latency.",
+        ],
+        "technical": {
+            "degraded_calls": str(len(degraded)),
+            "measured_calls": str(len(measured)),
+            "worst_packet_loss_percent": f"{worst_loss:.2f}",
+            "worst_jitter_ms": f"{worst_jitter:.1f}",
+            "worst_latency_ms": f"{worst_latency:.1f}",
+        },
+    }]
 
 
 def _signal(category: str, identifier: str, kind: str, title: str, body: str,

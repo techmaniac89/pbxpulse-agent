@@ -16,8 +16,10 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from .connectors import connector_for_settings
 from .diagnostics import ami_diagnostic_statuses
 from .history import (
+    cucm_history_diagnostics,
     history_diagnostics,
     read_recent_cdr_calls,
+    read_recent_cucm_calls,
     read_recent_security_events,
     read_recent_voicemails,
     security_diagnostics,
@@ -805,6 +807,10 @@ def _diagnostics_response(request: Request):
             voicemail_path,
         )
         payload["security"] = security_diagnostics(_security_log_path())
+    elif settings.pbx_type == "cucm":
+        payload["history"] = cucm_history_diagnostics(
+            settings.cucm_cdr_path, settings.cucm_cmr_path
+        )
     if _wants_html(request):
         return HTMLResponse(_json_page(request, "PBXSense diagnostics", payload))
     return JSONResponse(payload)
@@ -862,18 +868,29 @@ def _refresh_home_state() -> None:
 def _refresh_home_state_locked() -> tuple:
     global _cached_home_state, _cached_history, _history_refreshed_at
     snapshot = connector.snapshot()
-    if settings.pbx_type in {"asterisk", "grandstream"}:
+    if settings.pbx_type in {"asterisk", "grandstream", "cucm"}:
         now_monotonic = time.monotonic()
         if (
             _history_refreshed_at == 0
             or now_monotonic - _history_refreshed_at >= HISTORY_POLL_INTERVAL_SECONDS
         ):
-            cdr_path, voicemail_path = _history_paths()
-            _cached_history = (
-                read_recent_cdr_calls(cdr_path, limit=1000),
-                read_recent_voicemails(voicemail_path),
-                read_recent_security_events(_security_log_path()),
-            )
+            if settings.pbx_type == "cucm":
+                _cached_history = (
+                    read_recent_cucm_calls(
+                        settings.cucm_cdr_path,
+                        settings.cucm_cmr_path,
+                        limit=1000,
+                    ),
+                    [],
+                    [],
+                )
+            else:
+                cdr_path, voicemail_path = _history_paths()
+                _cached_history = (
+                    read_recent_cdr_calls(cdr_path, limit=1000),
+                    read_recent_voicemails(voicemail_path),
+                    read_recent_security_events(_security_log_path()),
+                )
             _history_refreshed_at = now_monotonic
         recent_calls, voicemails, security_events = _cached_history
         snapshot = snapshot.__class__(
@@ -1049,6 +1066,8 @@ def _valid_moment_hours(value: object) -> int:
 
 
 def _pbx_host() -> str:
+    if settings.pbx_type == "cucm":
+        return settings.cucm_host
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_host
     if settings.pbx_type == "yeastar":
@@ -1059,6 +1078,8 @@ def _pbx_host() -> str:
 
 
 def _pbx_port() -> int | str:
+    if settings.pbx_type == "cucm":
+        return 8443
     if settings.pbx_type == "freeswitch":
         return settings.freeswitch_port
     if settings.pbx_type == "yeastar":
@@ -1181,6 +1202,10 @@ def _diagnostic_rows(diagnostics: dict, message: object) -> str:
         ("tokenAccepted", "API token", True),
         ("apiReachable", "API", True),
         ("commandAccepted", "Command", True),
+        ("credentialsConfigured", "Credentials", True),
+        ("axlReachable", "AXL inventory", True),
+        ("risPortReachable", "Phone registration", True),
+        ("liveCallsAvailable", "Live calls", True),
         ("tlsVerification", "TLS verification", True),
         ("internetRelayState", "Internet relay", False),
         ("internetRelayProtocol", "Secure relay version", False),

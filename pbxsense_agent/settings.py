@@ -50,6 +50,13 @@ class AgentSettings:
     history_poll_seconds: float = 30
     internet_relay_enabled: bool = True
     internet_relay_poll_seconds: float = 15
+    cucm_host: str = ""
+    cucm_username: str = ""
+    cucm_password: str = ""
+    cucm_axl_version: str = "15.0"
+    cucm_verify_tls: bool = True
+    cucm_cdr_path: str = "/var/lib/pbxsense-agent/cucm/cdr"
+    cucm_cmr_path: str = "/var/lib/pbxsense-agent/cucm/cmr"
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -151,6 +158,17 @@ class AgentSettings:
             internet_relay_poll_seconds=max(
                 5, _env_float("PBXSENSE_INTERNET_RELAY_POLL_SECONDS", 15)
             ),
+            cucm_host=os.getenv("CUCM_HOST", "").strip(),
+            cucm_username=os.getenv("CUCM_USERNAME", "").strip(),
+            cucm_password=os.getenv("CUCM_PASSWORD", ""),
+            cucm_axl_version=os.getenv("CUCM_AXL_VERSION", "15.0").strip() or "15.0",
+            cucm_verify_tls=_env_bool("CUCM_VERIFY_TLS", True),
+            cucm_cdr_path=os.getenv(
+                "CUCM_CDR_PATH", "/var/lib/pbxsense-agent/cucm/cdr"
+            ).strip(),
+            cucm_cmr_path=os.getenv(
+                "CUCM_CMR_PATH", "/var/lib/pbxsense-agent/cucm/cmr"
+            ).strip(),
         )
 
 
@@ -194,6 +212,9 @@ def _normalize_pbx_type(raw: str) -> str:
         "yeastar": "yeastar",
         "yeastarpseries": "yeastar",
         "pseries": "yeastar",
+        "cucm": "cucm",
+        "ciscocucm": "cucm",
+        "ciscounifiedcommunicationsmanager": "cucm",
         "mock": "mock",
     }.get(normalized, normalized or "asterisk")
 
@@ -204,6 +225,7 @@ def _default_display_name(pbx_type: str) -> str:
         "grandstream": "Grandstream UCM",
         "freeswitch": "FreeSWITCH",
         "yeastar": "Yeastar P-Series",
+        "cucm": "Cisco Unified Communications Manager",
         "mock": "Mock PBX",
     }.get(pbx_type, "PBX")
 

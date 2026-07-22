@@ -30,6 +30,7 @@ PBX connector
 | FreeSWITCH | `freeswitch.py` | Event Socket connection, registered extensions, active channels, optional mod_callcenter queue counts and JSON CDR/voicemail paths |
 | FusionPBX | `freeswitch.py` | Supported as a FreeSWITCH-based system |
 | Yeastar P-Series | `yeastar.py` | OAuth API, extension status, live calls, queue waiting status, CDR, voicemail, recordings |
+| Cisco Unified Communications Manager | `cucm.py` | Read-only AXL inventory, RisPort70 registration presence, and completed CDR/CMR history; no active calls until JTAPI |
 | Mock | `mock.py` | Development/test fixture |
 
 GUI PBX distributions are handled through the PBX engine underneath them.

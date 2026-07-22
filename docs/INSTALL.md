@@ -216,6 +216,35 @@ loaded, it also reads queue names and waiting counts through
 `callcenter_config`. Missing `mod_callcenter` support does not make the
 connector unhealthy; queue data is simply omitted.
 
+## Cisco CUCM Install Notes
+
+Use `PBXSENSE_PBX_TYPE=cucm` and configure a dedicated read-only CUCM
+application user with AXL and Serviceability access. The Agent connects to the
+Publisher over HTTPS port 8443, uses AXL for phone/line inventory, and uses
+RisPort70 for current registration presence.
+
+```text
+PBXSENSE_PBX_TYPE=cucm
+PBXSENSE_AGENT_MODE=cucm
+CUCM_HOST=cucm-publisher.example.com
+CUCM_USERNAME=pbxsense-readonly
+CUCM_PASSWORD=<application-user password>
+CUCM_AXL_VERSION=15.0
+CUCM_VERIFY_TLS=true
+CUCM_CDR_PATH=/var/lib/pbxsense-agent/cucm/cdr
+CUCM_CMR_PATH=/var/lib/pbxsense-agent/cucm/cmr
+```
+
+Enable the Cisco AXL Web Service and Cisco RIS Data Collector services. Import
+the CUCM certificate authority into the Agent host trust store; disabling TLS
+verification is intended only for temporary diagnosis.
+
+Configure CUCM CDR Management to deliver CDR and CMR CSV files to an SFTP
+inbox exposed at the configured paths. PBXSense reads files already present in
+those directories; it does not provide or configure the SFTP server. Completed
+calls and media quality then appear in history. Active calls are deliberately
+unavailable until a later JTAPI connector is configured.
+
 ## Yeastar P-Series Install Notes
 
 Set `PBXSENSE_PBX_TYPE=yeastar` in the installer and provide the PBX base URL,

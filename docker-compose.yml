@@ -14,6 +14,7 @@ services:
       - pbxsense-agent-logs:/var/log/pbxsense-agent
       - ${ASTERISK_LOGS_HOST_PATH:-../asterisk/logs}:/var/log/asterisk:ro
       - ${ASTERISK_SPOOL_HOST_PATH:-../asterisk/spool}:/var/spool/asterisk:ro
+      - ${CUCM_HISTORY_HOST_PATH:-./cucm-history}:/var/lib/pbxsense-agent/cucm
       - /etc/localtime:/etc/localtime:ro
 
 volumes:

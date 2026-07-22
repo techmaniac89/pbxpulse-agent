@@ -13,7 +13,7 @@ Use `.env.example` as the starting point.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PBXSENSE_PBX_TYPE` | `asterisk` | PBX family. Supports `asterisk`, `grandstream`, `freeswitch`, `yeastar`, `mock`, and aliases listed below. |
+| `PBXSENSE_PBX_TYPE` | `asterisk` | PBX family. Supports `asterisk`, `grandstream`, `freeswitch`, `yeastar`, `cucm`, `mock`, and aliases listed below. |
 | `PBXSENSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, `yeastar`, or `mock`. |
 | `PBXSENSE_DISPLAY_NAME` | connector name | Friendly PBX name shown by the Agent. |
 | `PBXSENSE_TIMEZONE` | `TZ` or empty | IANA timezone for history and timestamps. |
@@ -47,6 +47,7 @@ through this path. Restart the Agent after changing either relay setting.
 | `fs`, `freeswitch` | `freeswitch` |
 | `fusionpbx` | `freeswitch` |
 | `yeastar`, `yeastar-p-series`, `pseries` | `yeastar` |
+| `cucm`, `cisco-cucm`, `cisco-unified-communications-manager` | `cucm` |
 | `mock` | `mock` |
 
 ## Asterisk AMI Settings
@@ -128,6 +129,33 @@ P-Series API. Queue visibility requires permission for `queue/search` and
 `queue/call_status`. The Agent keeps the short-lived Yeastar access token in
 memory and proxies a recording download, so the token is never returned to the
 app.
+
+## Cisco Unified Communications Manager Settings
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CUCM_HOST` | empty | CUCM Publisher hostname or IP. SOAP services use HTTPS port 8443. |
+| `CUCM_USERNAME` | empty | Dedicated CUCM application user. |
+| `CUCM_PASSWORD` | empty | Application-user password. |
+| `CUCM_AXL_VERSION` | `15.0` | AXL schema version matching the CUCM cluster. |
+| `CUCM_VERIFY_TLS` | `true` | Verify the CUCM certificate. Import its CA rather than disabling this in production. |
+| `CUCM_CDR_PATH` | `/var/lib/pbxsense-agent/cucm/cdr` | Inbox containing CUCM CDR CSV files. |
+| `CUCM_CMR_PATH` | `/var/lib/pbxsense-agent/cucm/cmr` | Inbox containing CUCM CMR CSV files. |
+
+Assign the application user `Standard AXL API Users`, `Standard AXL Read Only
+API Access`, and `Standard CCM Server Monitoring`. Enable **Cisco AXL Web
+Service** on the Publisher and **Cisco SOAP - Real-Time Service APIs** on the
+call-processing nodes. The connector uses a read-only SQL query through AXL to
+map directory numbers to devices, then uses RisPort70 for cluster-wide phone
+registration. It does not expose configuration writes or live calls.
+
+For history, configure CUCM CDR Management to push CDR and CMR files to an SFTP
+account whose destination directories are mounted at the two paths above. The
+Agent does not run an SFTP daemon itself. It reads completed-call records,
+correlates CMRs by CUCM global call ID, and emits a quality Insight at 2% packet
+loss, 30 ms jitter, or 150 ms latency. Keep the SFTP account write-only where
+your server supports it and keep the Agent directories read-only to the
+container where practical.
 
 ## Recorded Calls
 

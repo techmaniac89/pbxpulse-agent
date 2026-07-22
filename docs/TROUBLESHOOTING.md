@@ -142,7 +142,7 @@ away from the LAN:
 - Keep `/var/lib/pbxsense-agent/relay_identity.json` persistent across Docker
   rebuilds. If the identity was recreated, pair the app again.
 
-The app allows 75 seconds from the current Agent heartbeat (or 60 seconds from
+The app allows 105 seconds from the current Agent heartbeat (or 60 seconds from
 the envelope timestamp for older relay responses). If the Agent or its Internet
 connection is down, a brief secure connection may therefore change to
 reconnecting; this prevents stale PBX state appearing live.

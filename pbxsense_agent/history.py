@@ -24,6 +24,9 @@ class CdrCall:
     last_app: str = ""
     last_data: str = ""
     recording_id: str = ""
+    packet_loss_percent: float | None = None
+    jitter_ms: float | None = None
+    latency_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,117 @@ def read_recent_cdr_calls(path: str, *, limit: int = 30) -> list[CdrCall]:
 
     calls.sort(key=lambda call: call.started_at or datetime.min, reverse=True)
     return calls[:limit]
+
+
+def read_recent_cucm_calls(
+    cdr_path: str, cmr_path: str, *, limit: int = 1000
+) -> list[CdrCall]:
+    """Read completed CUCM CDRs and attach matching CMR quality evidence."""
+    quality = _cucm_quality_by_call(cmr_path)
+    calls: list[CdrCall] = []
+    for row in _cucm_csv_rows(cdr_path, file_limit=40):
+        started_at = _parse_timestamp(row.get("dateTimeOrigination", ""))
+        duration = _parse_int(row.get("duration", ""))
+        call_key = _cucm_call_key(row)
+        metrics = quality.get(call_key, {})
+        destination = (
+            row.get("finalCalledPartyNumber", "").strip()
+            or row.get("originalCalledPartyNumber", "").strip()
+        )
+        source = row.get("callingPartyNumber", "").strip()
+        if not source and not destination:
+            continue
+        calls.append(CdrCall(
+            source=source,
+            destination=destination,
+            disposition="ANSWERED" if duration > 0 else "NO ANSWER",
+            started_at=started_at,
+            duration_seconds=duration,
+            context=row.get("origDeviceName", "").strip(),
+            channel=row.get("origDeviceName", "").strip(),
+            destination_channel=row.get("destDeviceName", "").strip(),
+            packet_loss_percent=metrics.get("packet_loss_percent"),
+            jitter_ms=metrics.get("jitter_ms"),
+            latency_ms=metrics.get("latency_ms"),
+        ))
+    calls.sort(key=lambda call: call.started_at or datetime.min, reverse=True)
+    return calls[:limit]
+
+
+def cucm_history_diagnostics(cdr_path: str, cmr_path: str) -> dict[str, object]:
+    cdr_root, cmr_root = Path(cdr_path), Path(cmr_path)
+    return {
+        "cdrPath": str(cdr_root),
+        "cdrPathExists": _is_dir(cdr_root),
+        "cdrPathReadable": _is_readable_dir(cdr_root),
+        "cdrFiles": _count_csv_files(cdr_root),
+        "recentCallsReadable": len(read_recent_cucm_calls(cdr_path, cmr_path, limit=5)),
+        "cmrPath": str(cmr_root),
+        "cmrPathExists": _is_dir(cmr_root),
+        "cmrPathReadable": _is_readable_dir(cmr_root),
+        "cmrFiles": _count_csv_files(cmr_root),
+        "qualityRecordsReadable": len(_cucm_quality_by_call(cmr_path)),
+    }
+
+
+def _cucm_csv_rows(path: str, *, file_limit: int) -> list[dict[str, str]]:
+    root = Path(path)
+    if not _is_dir(root):
+        return []
+    try:
+        files = sorted(
+            (item for item in root.rglob("*") if item.is_file()),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )[:file_limit]
+    except OSError:
+        return []
+    rows: list[dict[str, str]] = []
+    for item in files:
+        try:
+            with item.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+                rows.extend(dict(row) for row in csv.DictReader(handle))
+        except (OSError, csv.Error):
+            continue
+    return rows
+
+
+def _cucm_quality_by_call(path: str) -> dict[str, dict[str, float]]:
+    grouped: dict[str, dict[str, float]] = {}
+    for row in _cucm_csv_rows(path, file_limit=40):
+        key = _cucm_call_key(row)
+        if not key:
+            continue
+        received = _parse_float(row.get("packetsReceived", ""))
+        lost = _parse_float(row.get("numberPacketsLost", ""))
+        loss = (lost / (received + lost) * 100) if received + lost > 0 else 0.0
+        current = grouped.setdefault(key, {})
+        current["packet_loss_percent"] = max(current.get("packet_loss_percent", 0.0), loss)
+        current["jitter_ms"] = max(current.get("jitter_ms", 0.0), _parse_float(row.get("jitter", "")))
+        current["latency_ms"] = max(current.get("latency_ms", 0.0), _parse_float(row.get("latency", "")))
+    return grouped
+
+
+def _cucm_call_key(row: dict[str, str]) -> str:
+    manager = row.get("globalCallID_callManagerId", "").strip()
+    call = row.get("globalCallID_callId", "").strip()
+    return f"{manager}:{call}" if manager or call else ""
+
+
+def _parse_float(value: object) -> float:
+    try:
+        return float(str(value or "0"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _count_csv_files(root: Path) -> int:
+    if not _is_dir(root):
+        return 0
+    try:
+        return sum(1 for item in root.rglob("*") if item.is_file())
+    except OSError:
+        return 0
 
 
 def _recent_cdr_rows(path: Path, *, limit: int) -> list[list[str]]:

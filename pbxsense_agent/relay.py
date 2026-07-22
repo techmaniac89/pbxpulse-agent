@@ -26,9 +26,9 @@ except ImportError:  # Existing Agents remain usable before the optional relay i
     X25519PrivateKey = X25519PublicKey = AESGCM = HKDF = SHA256 = None  # type: ignore[assignment,misc]
 
 
-# A 15-second cadence paired with the relay's 60-second loss timeout tolerates
-# one missed request without turning a brief network hiccup into a false alarm.
-PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 15
+# A 30-second cadence paired with the relay's 90-second loss timeout tolerates
+# two missed requests without turning a brief network hiccup into a false alarm.
+PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 _FEED_ONLY_LIVE_CALL_KINDS = {
     "call_active",
     "pbx_live_calls_activity",

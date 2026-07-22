@@ -549,15 +549,15 @@ class RelayTest(unittest.TestCase):
             phone_one = next(item for item in queued if item["payload"]["fcmToken"] == "phone-one")
             self.assertFalse(phone_one["payload"]["meaningfulEnabled"])
 
-    def test_heartbeats_every_fifteen_seconds(self) -> None:
+    def test_heartbeats_every_thirty_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = _RecordingRelay(str(Path(directory) / "identity.json"))
             relay._last_heartbeat_at = 100.0
 
-            with patch("pbxsense_agent.relay.time.monotonic", return_value=114.0):
+            with patch("pbxsense_agent.relay.time.monotonic", return_value=129.0):
                 relay.heartbeat()
             self.assertEqual(relay.requests, [])
 
-            with patch("pbxsense_agent.relay.time.monotonic", return_value=115.0):
+            with patch("pbxsense_agent.relay.time.monotonic", return_value=130.0):
                 relay.heartbeat()
             self.assertEqual([request[0] for request in relay.requests], ["/v1/agents/agent_test/heartbeat"])

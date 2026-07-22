@@ -9,6 +9,7 @@ from .mock import mock_snapshot
 from .pulse import AmiSnapshot
 from .settings import AgentSettings
 from .yeastar import YeastarClient
+from .cucm import CucmClient
 
 
 class PBXConnector(Protocol):
@@ -46,4 +47,6 @@ def connector_for_settings(settings: AgentSettings) -> PBXConnector:
         return YeastarClient(settings)
     if settings.pbx_type == "grandstream":
         return GrandstreamUcmClient(settings)
+    if settings.pbx_type == "cucm":
+        return CucmClient(settings)
     return AmiClient(settings)

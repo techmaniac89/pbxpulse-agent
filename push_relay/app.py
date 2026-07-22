@@ -29,7 +29,7 @@ app = FastAPI(title="PBXSense Push Relay", version="0.4.8")
 firebase_admin.initialize_app(options={"projectId": os.getenv("GOOGLE_CLOUD_PROJECT")})
 db = firestore.client()
 _admin_token = os.getenv("PBXSENSE_RELAY_ADMIN_TOKEN", "").strip()
-AGENT_LOSS_TIMEOUT_SECONDS = 60
+AGENT_LOSS_TIMEOUT_SECONDS = 90
 logger = logging.getLogger(__name__)
 
 
