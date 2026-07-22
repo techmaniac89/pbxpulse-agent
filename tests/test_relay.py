@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from pbxsense_agent.relay import (
     AgentRelay,
+    RelayRequestError,
     _encrypt_snapshot_for_device,
     _secure_snapshot_projection,
 )
@@ -159,16 +160,46 @@ class RelayTest(unittest.TestCase):
         )
         self.assertEqual(decrypted, plaintext)
 
-    def test_secure_exchange_rejects_plain_http_outside_local_development(self) -> None:
+    def test_all_relay_traffic_rejects_plain_http_outside_local_development(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "must use HTTPS"):
+                AgentRelay(
+                    url="http://relay.example",
+                    identity_path=str(Path(directory) / "identity.json"),
+                    display_name="Test PBX",
+                )
+
+    def test_plain_http_is_allowed_for_local_relay_development(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = AgentRelay(
-                url="http://relay.example",
+                url="http://localhost:8080",
                 identity_path=str(Path(directory) / "identity.json"),
                 display_name="Test PBX",
             )
-            relay._state["agent_id"] = "agent_test"
-            with self.assertRaisesRegex(OSError, "requires HTTPS"):
-                relay.secure_exchange({"protocolVersion": 1})
+            self.assertEqual(relay._url, "http://localhost:8080")
+
+    def test_permanent_outbox_error_does_not_block_later_items(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = _RecordingRelay(str(Path(directory) / "identity.json"))
+            relay._state["outbox"] = [
+                {"kind": "events", "payload": {"id": "invalid"}},
+                {"kind": "events", "payload": {"id": "valid"}},
+            ]
+            attempts = 0
+
+            def request(path: str, payload: dict, *, signed: bool) -> dict:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise RelayRequestError(400, "Relay returned HTTP 400")
+                return {"status": "accepted"}
+
+            relay._request = request  # type: ignore[method-assign]
+            relay._flush()
+
+            self.assertEqual(relay._state["outbox"], [])
+            self.assertEqual(relay.status()["rejectedOutboxItems"], 1)
+            self.assertEqual(attempts, 2)
 
     def test_secure_exchange_requires_replay_protected_signing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

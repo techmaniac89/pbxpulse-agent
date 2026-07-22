@@ -37,6 +37,28 @@ _FEED_ONLY_LIVE_CALL_KINDS = {
 }
 
 
+class RelayRequestError(OSError):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def retryable(self) -> bool:
+        return self.status in {408, 425, 429} or self.status >= 500
+
+
+def _validated_relay_url(value: str) -> str:
+    url = value.rstrip("/")
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname:
+        return url
+    if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        return url
+    raise ValueError("PBXSENSE_RELAY_URL must use HTTPS (HTTP is allowed only for localhost)")
+
+
 class AgentRelay:
     """Signs Agent requests and maintains a small durable relay outbox."""
 
@@ -48,7 +70,7 @@ class AgentRelay:
         display_name: str,
         timeout_seconds: float = 5,
     ) -> None:
-        self._url = url.rstrip("/")
+        self._url = _validated_relay_url(url)
         self._path = Path(identity_path)
         self._display_name = display_name
         self._timeout_seconds = timeout_seconds
@@ -75,6 +97,8 @@ class AgentRelay:
             "deviceRegistrationRevision": int(
                 self._state.get("device_registration_revision", 0)
             ),
+            "rejectedOutboxItems": len(self._state.get("rejected_outbox", [])),
+            "lastOutboxError": str(self._state.get("last_outbox_error", "")),
         }
 
     def activation(self) -> dict[str, str]:
@@ -438,6 +462,20 @@ class AgentRelay:
                     item["payload"],
                     signed=True,
                 )
+            except RelayRequestError as exc:
+                if exc.retryable:
+                    break
+                outbox.pop(0)
+                rejected = self._state.setdefault("rejected_outbox", [])
+                rejected.append({
+                    "kind": str(item.get("kind", "unknown")),
+                    "status": exc.status,
+                    "at": int(time.time()),
+                })
+                rejected[:] = rejected[-20:]
+                self._state["last_outbox_error"] = str(exc)[:240]
+                self._save()
+                continue
             except OSError:
                 break
             outbox.pop(0)
@@ -455,12 +493,6 @@ class AgentRelay:
         signed: bool,
         replay_protected: bool = False,
     ) -> dict[str, Any]:
-        if replay_protected:
-            parsed_url = urllib.parse.urlparse(self._url)
-            if parsed_url.scheme != "https" and parsed_url.hostname not in {
-                "localhost", "127.0.0.1", "::1",
-            }:
-                raise OSError("Secure Internet Relay requires HTTPS")
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if signed:
@@ -482,7 +514,16 @@ class AgentRelay:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
                 decoded = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:200]
+            except OSError:
+                detail = ""
+            message = f"Relay returned HTTP {exc.code}"
+            if detail:
+                message += f": {detail}"
+            raise RelayRequestError(exc.code, message) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
             raise OSError(str(exc)) from exc
         return decoded if isinstance(decoded, dict) else {}
 

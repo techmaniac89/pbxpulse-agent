@@ -91,6 +91,11 @@ The relay identity under `/var/lib/pbxsense-agent` contains the installation's
 private signing key and queued device registrations. The Agent enforces `0700`
 on its directory and `0600` on the identity file on Linux.
 
+The Agent refuses non-local `http://` relay URLs. Hosted relay traffic must use
+HTTPS for activation secrets, device registrations, Signals, presence, and
+encrypted snapshot envelopes. Plain HTTP is reserved for an explicit localhost
+development relay.
+
 `endpoint_activity.json` in the same persistent data directory contains only
 extension identifiers and last-active timestamps. It contains no PBX
 credentials, but it is operational metadata and should remain protected by the

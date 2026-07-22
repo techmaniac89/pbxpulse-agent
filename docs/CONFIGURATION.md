@@ -25,7 +25,7 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_HISTORY_POLL_SECONDS` | `30` | CDR, voicemail, recording, and security-history refresh cadence, clamped to at least 5 seconds. |
 | `PBXSENSE_ENDPOINT_ACTIVITY_PATH` | `/var/lib/pbxsense-agent/endpoint_activity.json` | Persistent last-active timestamps captured when monitored devices transition offline. Keep this inside the Agent data volume. |
 | `PBXSENSE_QUALITY_FREQUENCY_SECONDS` | `180` | Evidence window before aggregate availability Tips are emitted. Immediate per-device Health Signals do not wait for it. |
-| `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Leave empty only for deliberately local-only installs. |
+| `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Production URLs must use HTTPS; plain HTTP is accepted only for localhost development. Leave empty only for deliberately local-only installs. |
 | `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
 | `PBXSENSE_RELAY_TIMEOUT` | `5` | Outbound relay HTTP timeout in seconds. |
 | `PBXSENSE_INTERNET_RELAY_ENABLED` | `true` | Makes encrypted Internet Relay available to apps that explicitly enable it while pairing. Set `false` to prohibit it for this Agent. |
@@ -37,6 +37,9 @@ encryption key. Every opted-in app receives a distinct envelope;
 the relay cannot decrypt it. The projection removes PBX host/port details and
 recording references. Diagnostics, recordings, and PBX control are never sent
 through this path. Restart the Agent after changing either relay setting.
+Permanent relay `4xx` rejections are quarantined so one invalid entry cannot
+block the outbox; retryable `408`, `425`, `429`, and `5xx` responses remain
+queued. The relay status exposes the rejected count and latest rejection.
 
 `PBXSENSE_PBX_TYPE` aliases:
 
