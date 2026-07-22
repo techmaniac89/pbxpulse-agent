@@ -4,7 +4,10 @@ import ast
 import unittest
 from pathlib import Path
 
-from pbxsense_agent.diagnostics import ami_diagnostic_statuses
+from pbxsense_agent.diagnostics import (
+    ami_diagnostic_statuses,
+    connector_diagnostic_statuses,
+)
 
 
 class MainRouteStructureTest(unittest.TestCase):
@@ -34,6 +37,44 @@ class MainRouteStructureTest(unittest.TestCase):
                 ("AMI protocol", "Optional (login accepted)"),
                 ("Authentication", "Accepted"),
             ),
+        )
+
+    def test_freeswitch_diagnostics_use_esl_vocabulary(self) -> None:
+        statuses = connector_diagnostic_statuses({
+            "pbxType": "freeswitch",
+            "tcpConnected": True,
+            "loginAccepted": True,
+            "commandAccepted": True,
+        })
+
+        self.assertEqual(
+            statuses,
+            (
+                ("PBX port", "Reachable"),
+                ("ESL authentication", "Accepted"),
+                ("ESL command", "Accepted"),
+            ),
+        )
+        self.assertNotIn("AMI", " ".join(label for label, _ in statuses))
+
+    def test_grandstream_diagnostics_identify_ucm_ami(self) -> None:
+        statuses = connector_diagnostic_statuses({
+            "pbxType": "grandstream",
+            "tcpConnected": True,
+            "bannerReceived": True,
+            "loginAccepted": True,
+        })
+
+        self.assertEqual(statuses[1], ("UCM AMI protocol", "Detected"))
+
+    def test_api_and_cucm_diagnostics_do_not_get_ami_rows(self) -> None:
+        self.assertEqual(
+            connector_diagnostic_statuses({"pbxType": "yeastar", "apiReachable": True}),
+            (),
+        )
+        self.assertEqual(
+            connector_diagnostic_statuses({"pbxType": "cucm", "axlReachable": True}),
+            (),
         )
     def test_pair_route_has_a_direct_html_return(self) -> None:
         """Keep later route declarations from accidentally splitting pair()."""
@@ -116,11 +157,19 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn("Same-origin request required", source)
         self.assertGreaterEqual(source.count("_require_safe_cookie_mutation(request)"), 3)
 
-    def test_relay_diagnostic_uses_customer_facing_version_label(self) -> None:
+    def test_admin_browser_session_is_long_lived_and_renews(self) -> None:
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 
-        self.assertIn('("internetRelayProtocol", "Secure relay version", False)', source)
-        self.assertIn('f"v{relay_status[\'protocolVersion\']}"', source)
+        self.assertIn("LOCAL_WEB_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10", source)
+        self.assertIn("async def renew_local_admin_session", source)
+
+    def test_agent_page_hides_relay_version_and_offers_contact(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertNotIn('("internetRelayProtocol", "Secure relay version", False)', source)
+        self.assertIn('href="mailto:techmaniac89@gmail.com"', source)
+        self.assertIn('class="footer-meta"', source)
+        self.assertIn('class="button footer-contact"', source)
 
 
 if __name__ == "__main__":

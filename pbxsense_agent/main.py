@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .connectors import connector_for_settings
-from .diagnostics import ami_diagnostic_statuses
+from .diagnostics import connector_diagnostic_statuses
 from .history import (
     cucm_history_diagnostics,
     history_diagnostics,
@@ -35,6 +35,7 @@ from .pulse import (
     _now,
     build_home_payload,
 )
+from .presence_history import EndpointLastActiveTracker
 from .recordings import find_recording
 from .relay import AgentRelay
 from .relay import PRESENCE_HEARTBEAT_INTERVAL_SECONDS
@@ -48,6 +49,7 @@ endpoint_availability_tracker = EndpointAvailabilitySignalTracker()
 endpoint_aggregate_tip_tracker = EndpointAggregateTipTracker(
     timedelta(seconds=max(0, settings.quality_frequency_seconds))
 )
+endpoint_last_active_tracker = EndpointLastActiveTracker(settings.endpoint_activity_path)
 push_relay = AgentRelay(
     url=settings.relay_url,
     identity_path=settings.relay_identity_path,
@@ -63,6 +65,9 @@ internet_relay = SecureInternetRelay(
 )
 app = FastAPI(title="PBXSense Agent", version=AGENT_VERSION)
 LOCAL_WEB_COOKIE = "pbxsense_agent_local_web"
+# Browser authorization is effectively installation-lived and is renewed on
+# every HTML visit. Token rotation or clearing browser site data revokes it.
+LOCAL_WEB_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10
 LIVE_INTERVAL_SECONDS = 1
 SNAPSHOT_POLL_INTERVAL_SECONDS = settings.snapshot_poll_seconds
 HISTORY_POLL_INTERVAL_SECONDS = settings.history_poll_seconds
@@ -72,9 +77,27 @@ _relay_publish_task: asyncio.Task[None] | None = None
 _relay_heartbeat_task: asyncio.Task[None] | None = None
 _internet_relay_task: asyncio.Task[None] | None = None
 _snapshot_lock = threading.Lock()
-_cached_home_state: tuple[object, object, list[dict], list[dict], bool] | None = None
+_cached_home_state: tuple[object, object, list[dict], list[dict], bool, dict] | None = None
 _cached_history: tuple[list, list, list] = ([], [], [])
 _history_refreshed_at = 0.0
+
+
+@app.middleware("http")
+async def renew_local_admin_session(request: Request, call_next):
+    response = await call_next(request)
+    if (
+        request.method == "GET"
+        and _wants_html(request)
+        and _has_valid_local_web_cookie(request)
+    ):
+        response.set_cookie(
+            LOCAL_WEB_COOKIE,
+            _local_web_cookie_value(),
+            max_age=LOCAL_WEB_COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="strict",
+        )
+    return response
 
 
 @app.on_event("startup")
@@ -189,10 +212,13 @@ def index(request: Request):
               <a class="button" href="/diagnostics{_link_token_suffix(request)}">Diagnostics</a>
             </div>
             {diagnostic_html}
-            <p class="footer">
-              <span>PBX: {escape(settings.pbx_type)}</span>
-              <small>Version {AGENT_VERSION} · {AGENT_RELEASE_CHANNEL.title()}</small>
-            </p>
+            <div class="footer">
+              <span class="footer-meta">
+                <span>PBX: {escape(settings.pbx_type)}</span>
+                <small>Version {AGENT_VERSION} &middot; {AGENT_RELEASE_CHANNEL.title()}</small>
+              </span>
+              <a class="button footer-contact" href="mailto:techmaniac89@gmail.com">Contact</a>
+            </div>
           </section>
         """,
     )
@@ -440,13 +466,17 @@ def _page(*, title: str, body: str) -> str:
           dt {{ color: var(--muted); }}
           dd {{ margin: 0; font-weight: 650; overflow-wrap: anywhere; }}
           .footer {{
-            display: grid;
-            gap: 3px;
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 16px;
             margin-top: 18px;
             color: var(--muted);
             font-size: 13px;
           }}
+          .footer-meta {{ display: grid; gap: 3px; }}
           .footer small {{ font-size: inherit; }}
+          .footer-contact {{ flex: 0 0 auto; }}
           pre {{
             margin: 18px 0 0;
             padding: 18px;
@@ -462,6 +492,7 @@ def _page(*, title: str, body: str) -> str:
             main {{ align-items: start; padding-top: 24px; }}
             .hero-card, .json-card {{ padding: 22px; border-radius: 22px; }}
             .diagnostics div {{ grid-template-columns: 1fr; gap: 3px; }}
+            .footer {{ align-items: center; }}
           }}
         </style>
       </head>
@@ -911,18 +942,20 @@ def _refresh_home_state_locked() -> tuple:
         observed_at,
     )
     show_aggregate_tip = endpoint_aggregate_tip_tracker.observe(snapshot, observed_at)
+    endpoint_last_active = endpoint_last_active_tracker.observe(snapshot, observed_at)
     _cached_home_state = (
         snapshot,
         observed_at,
         moment_events,
         endpoint_unavailability_signals,
         show_aggregate_tip,
+        endpoint_last_active,
     )
     return _cached_home_state
 
 
 def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
-    snapshot, observed_at, moment_events, endpoint_signals, show_aggregate_tip = state
+    snapshot, observed_at, moment_events, endpoint_signals, show_aggregate_tip, endpoint_last_active = state
     payload = build_home_payload(
         snapshot,
         display_name=settings.display_name,
@@ -935,6 +968,7 @@ def _home_payload_from_state(state: tuple, *, moment_hours: int) -> dict:
         moment_hours=moment_hours,
         moment_events=moment_events,
         endpoint_unavailability_signals=endpoint_signals,
+        endpoint_last_active=endpoint_last_active,
     )
     if not show_aggregate_tip:
         payload["signals"] = [
@@ -1183,8 +1217,8 @@ def _agent_status() -> dict:
     )
     diagnostics["internetRelayProtocol"] = f"v{relay_status['protocolVersion']}"
     diagnostics["ok"] = diagnostics.get("ok") is True or diagnostics.get("loginAccepted") is True
-    if diagnostics["ok"]:
-        diagnostics["message"] = f"{connector.diagnostics_label} login succeeded."
+    if diagnostics["ok"] and not diagnostics.get("message"):
+        diagnostics["message"] = f"{connector.diagnostics_label} connection check succeeded."
     return diagnostics
 
 
@@ -1193,25 +1227,31 @@ def _yes_no(value: object) -> str:
 
 
 def _diagnostic_rows(diagnostics: dict, message: object) -> str:
-    ami_statuses = ami_diagnostic_statuses(diagnostics)
+    connection_statuses = connector_diagnostic_statuses(diagnostics)
     fields = (
         ("host", "Host", False),
         ("port", "Port", False),
         ("baseUrl", "API URL", False),
         ("apiVersion", "API version", False),
+        ("clientIdConfigured", "Client ID configured", True),
+        ("clientSecretConfigured", "Client secret configured", True),
         ("tokenAccepted", "API token", True),
         ("apiReachable", "API", True),
-        ("commandAccepted", "Command", True),
         ("credentialsConfigured", "Credentials", True),
         ("axlReachable", "AXL inventory", True),
         ("risPortReachable", "Phone registration", True),
+        ("jtapiConfigured", "JTAPI configured", True),
+        ("jtapiCredentialsConfigured", "JTAPI credentials", True),
+        ("jtapiProcessRunning", "JTAPI bridge", True),
+        ("jtapiReachable", "JTAPI stream", True),
+        ("jtapiActiveCalls", "JTAPI active calls", False),
         ("liveCallsAvailable", "Live calls", True),
+        ("tlsEnabled", "TLS enabled", True),
         ("tlsVerification", "TLS verification", True),
         ("internetRelayState", "Internet relay", False),
-        ("internetRelayProtocol", "Secure relay version", False),
     )
     rows: list[str] = []
-    for label, value in ami_statuses:
+    for label, value in connection_statuses:
         rows.append(f"<div><dt>{label}</dt><dd>{value}</dd></div>")
     for key, label, boolean in fields:
         if key not in diagnostics:
@@ -1241,7 +1281,7 @@ def _localhost_cookie_redirect(request: Request) -> RedirectResponse | None:
         response.set_cookie(
             LOCAL_WEB_COOKIE,
             _local_web_cookie_value(),
-            max_age=60 * 60 * 8,
+            max_age=LOCAL_WEB_COOKIE_MAX_AGE_SECONDS,
             httponly=True,
             samesite="strict",
         )

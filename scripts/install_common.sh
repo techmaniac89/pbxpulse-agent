@@ -1,16 +1,12 @@
 #!/bin/sh
+# Shared service setup used by the distribution-specific entry points.
 set -e
 
 SERVICE_USER="pbxsense"
 SERVICE_NAME="pbxsense-agent"
-INSTALL_DIR="/opt/pbxsense-agent"
-ENV_FILE="/etc/pbxsense-agent.env"
+INSTALL_DIR="${PBXSENSE_INSTALL_DIR:-/opt/pbxsense-agent}"
+ENV_FILE="${PBXSENSE_ENV_FILE:-/etc/pbxsense-agent.env}"
 AGENT_PORT="${PBXSENSE_AGENT_PORT:-8765}"
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Run this installer with sudo or as root."
-  exit 1
-fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -230,7 +226,7 @@ choose_pbx_type() {
     [ "$has_asterisk" -eq 1 ] && echo "  - Asterisk files or commands found." >&2
     [ "$has_freeswitch" -eq 1 ] && echo "  - FreeSWITCH files or commands found." >&2
     [ "$has_asterisk" -eq 0 ] && [ "$has_freeswitch" -eq 0 ] && echo "  - No local PBX files found; using Asterisk defaults." >&2
-    printf "PBX type: asterisk, grandstream, freeswitch, yeastar, cucm, or mock [%s]: " "$detected" >&2
+    printf "PBX type: asterisk, freeswitch, yeastar, grandstream, cucm, or mock [%s]: " "$detected" >&2
     read -r answer
     if [ -n "$answer" ]; then
       detected="$answer"
@@ -281,6 +277,20 @@ configure_freeswitch_env() {
   prompt_value FREESWITCH_RECORDINGS_PATH "FreeSWITCH recordings folder (optional)" "${FREESWITCH_RECORDINGS_PATH:-}"
 }
 
+print_admin_link() {
+  token="$(env_value PBXSENSE_AGENT_TOKEN)"
+  port="$(env_value PBXSENSE_AGENT_PORT)"
+  [ -n "$port" ] || port="8765"
+  host="${PBXSENSE_ACCESS_HOST:-}"
+  if [ -z "$host" ] && command -v hostname >/dev/null 2>&1; then
+    host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  [ -n "$host" ] || host="$(hostname 2>/dev/null || printf '%s' '127.0.0.1')"
+  echo "Open PBXSense Agent on this PC:"
+  echo "http://$host:$port/?token=$token"
+  echo "The browser remains authorized until its site data is cleared or the Agent token changes."
+}
+
 configure_grandstream_env() {
   echo "Configuring Grandstream UCM AMI settings in $ENV_FILE"
   set_env_value PBXSENSE_PBX_TYPE "grandstream"
@@ -325,6 +335,12 @@ configure_cucm_env() {
   prompt_value CUCM_VERIFY_TLS "Verify CUCM TLS certificate (true/false)" "${CUCM_VERIFY_TLS:-true}"
   prompt_value CUCM_CDR_PATH "CUCM CDR inbox" "${CUCM_CDR_PATH:-/var/lib/pbxsense-agent/cucm/cdr}"
   prompt_value CUCM_CMR_PATH "CUCM CMR inbox" "${CUCM_CMR_PATH:-/var/lib/pbxsense-agent/cucm/cmr}"
+  prompt_value CUCM_JTAPI_ENABLED "Enable optional JTAPI live calls (true/false)" "${CUCM_JTAPI_ENABLED:-false}"
+  prompt_value CUCM_JTAPI_CLASSPATH "Cisco JTAPI classpath" "${CUCM_JTAPI_CLASSPATH:-/opt/pbxsense-agent/vendor/jtapi/*}"
+  prompt_value CUCM_JTAPI_JAVA "Java executable" "${CUCM_JTAPI_JAVA:-java}"
+  prompt_value CUCM_JTAPI_USERNAME "JTAPI application user (blank uses CUCM user)" "${CUCM_JTAPI_USERNAME:-}"
+  prompt_secret CUCM_JTAPI_PASSWORD "JTAPI password (blank uses CUCM password)" "${CUCM_JTAPI_PASSWORD:-}"
+  prompt_value CUCM_JTAPI_POLL_SECONDS "JTAPI live-call poll seconds" "${CUCM_JTAPI_POLL_SECONDS:-1}"
 }
 
 configure_mock_env() {
@@ -351,9 +367,26 @@ configure_agent_env() {
   esac
 }
 
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y python3 python3-venv python3-pip
+if [ "${PBXSENSE_CONFIGURE_ONLY:-false}" = "true" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to configure PBXSense Agent."
+    exit 1
+  fi
+  ENV_CREATED=0
+  if [ ! -f "$ENV_FILE" ]; then
+    cp "$SOURCE_DIR/.env.example" "$ENV_FILE"
+    ENV_CREATED=1
+  fi
+  python3 "$SOURCE_DIR/scripts/ensure_token.py" "$ENV_FILE"
+  configure_agent_env
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  echo "PBXSense Docker environment saved to $ENV_FILE"
+  exit 0
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run this installer with sudo or as root."
+  exit 1
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -365,9 +398,9 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/pbxsense-agent --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-mkdir -p "$INSTALL_DIR" /var/lib/pbxsense-agent/cucm/cdr /var/lib/pbxsense-agent/cucm/cmr /var/log/pbxsense-agent
+mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/vendor/jtapi" /var/lib/pbxsense-agent/cucm/cdr /var/lib/pbxsense-agent/cucm/cmr /var/log/pbxsense-agent
 
-for entry in pbxsense_agent scripts docs requirements.txt .env.example CODEX.md README.md SECURITY.md Dockerfile docker-compose.yml docker-compose.lan.yml docker-compose.parent-example.yml; do
+for entry in pbxsense_agent jtapi_bridge scripts docs requirements.txt .env.example CODEX.md README.md SECURITY.md Dockerfile docker-compose.yml docker-compose.lan.yml docker-compose.parent-example.yml; do
   if [ -e "$SOURCE_DIR/$entry" ]; then
     rm -rf "$INSTALL_DIR/$entry"
     cp -R "$SOURCE_DIR/$entry" "$INSTALL_DIR/$entry"
@@ -419,11 +452,32 @@ PY
 python3 "$INSTALL_DIR/scripts/ensure_token.py" "$ENV_FILE"
 configure_agent_env
 
+if [ "$(env_value CUCM_JTAPI_ENABLED)" = "true" ]; then
+  if ! command -v java >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y openjdk-8-jre-headless 2>/dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y java-1.8.0-openjdk-headless 2>/dev/null || true
+    fi
+  fi
+  if ! command -v java >/dev/null 2>&1; then
+    echo "Install a Cisco-supported Java 8 runtime before enabling CUCM JTAPI."
+    exit 1
+  fi
+  java_major="$(java -version 2>&1 | awk -F'[\".]' '/version/ { if ($2 == "1") print $3; else print $2; exit }')"
+  if [ "$java_major" != "8" ]; then
+    echo "CUCM JTAPI requires Cisco-supported Java 8; detected Java ${java_major:-unknown}."
+    exit 1
+  fi
+fi
+
 python3 -m venv "$INSTALL_DIR/.venv"
 "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$INSTALL_DIR/.venv/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" /var/lib/pbxsense-agent /var/log/pbxsense-agent
+# Remove the retired access helper when upgrading from Agent 0.5.5/0.5.6.
+rm -f /usr/local/bin/pbxsense-agent
 chmod 600 "$ENV_FILE"
 chown root:root "$ENV_FILE"
 
@@ -459,3 +513,4 @@ fi
 echo "PBXSense Agent installed."
 echo "Environment: $ENV_FILE"
 echo "Service: sudo systemctl status $SERVICE_NAME"
+print_admin_link

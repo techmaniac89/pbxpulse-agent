@@ -9,6 +9,8 @@ internet.
 - Keep Asterisk AMI private to localhost, a single Agent host, LAN, or VPN.
 - Keep FreeSWITCH Event Socket private to localhost, a single Agent host, LAN,
   or VPN.
+- Keep CUCM AXL, RisPort, and JTAPI access on the trusted management network.
+  Associate the JTAPI user only with phones PBXSense is intended to observe.
 - Do not expose AMI, ESL, SIP management surfaces, SSH, or raw PBX logs to the
   public internet.
 - If remote access is needed, put it behind a VPN or another controlled private
@@ -38,6 +40,13 @@ operator `ping`/`pong` smoke test.
 ## Agent Token
 
 Set `PBXSENSE_AGENT_TOKEN` for production and LAN deployments.
+
+Native and Docker installers print a complete authenticated admin URL instead
+of asking the administrator to transcribe the token. Successful access removes
+the token from the address bar and creates a long-lived, renewable HttpOnly,
+SameSite=Strict cookie for that browser. It remains authorized until site data
+is cleared or the Agent token changes. Treat the printed installation URL like
+a password and open it only on the intended trusted PC.
 
 When a token is set, every protected HTTP and `/live` request must authenticate,
 including requests from localhost, a private LAN, or a VPN. A valid token on an
@@ -81,6 +90,11 @@ sudo chown root:root /etc/pbxsense-agent.env
 The relay identity under `/var/lib/pbxsense-agent` contains the installation's
 private signing key and queued device registrations. The Agent enforces `0700`
 on its directory and `0600` on the identity file on Linux.
+
+`endpoint_activity.json` in the same persistent data directory contains only
+extension identifiers and last-active timestamps. It contains no PBX
+credentials, but it is operational metadata and should remain protected by the
+Agent data-directory permissions and backup policy.
 
 Preserve `relay_identity.json` across rebuilds and host migrations. Anyone who
 obtains it can authenticate as that Agent, so store backups like credentials.
@@ -140,6 +154,13 @@ volumes:
 
 Keep `.env` out of source control. It contains PBX credentials and the Agent
 token.
+
+Cisco's JTAPI Client jars are cluster-supplied proprietary dependencies and
+are intentionally not committed, packaged, or uploaded in the Docker build
+context. Store them only in the ignored `vendor/jtapi` deployment directory.
+The bridge receives its credential through the protected Agent environment,
+not through command-line arguments, and runs with the same unprivileged
+`pbxsense` identity as the Agent.
 
 ## Diagnostics Data
 

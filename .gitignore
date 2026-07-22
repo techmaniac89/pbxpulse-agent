@@ -7,6 +7,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 dist/
+/vendor/
 packaging/build/
 
 # Local leftovers from the old app workspace layout.

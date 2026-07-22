@@ -441,6 +441,7 @@ def build_home_payload(
     moment_hours: int = 24,
     moment_events: list[dict] | None = None,
     endpoint_unavailability_signals: set[str] | None = None,
+    endpoint_last_active: dict[str, datetime] | None = None,
 ) -> dict:
     now = now or _now(timezone_name)
     moment_hours = _valid_moment_hours(moment_hours)
@@ -459,7 +460,12 @@ def build_home_payload(
         for endpoint in snapshot.endpoints
         if endpoint.number
     }
-    people = _build_people(snapshot.endpoints, active_channels, extension_names)
+    people = _build_people(
+        snapshot.endpoints,
+        active_channels,
+        extension_names,
+        endpoint_last_active or {},
+    )
     trunks = _build_trunks(snapshot.endpoints, extension_names)
     queues = _build_queues(snapshot.queues)
     active_calls = [
@@ -536,6 +542,7 @@ def _build_people(
     endpoints: list[AmiEndpoint],
     active_channels: list[AmiChannel],
     extension_names: dict[str, str],
+    endpoint_last_active: dict[str, datetime],
 ) -> list[dict]:
     talking_extensions = {_person_endpoint(channel) for channel in active_channels}
     talking_extensions.discard("")
@@ -566,8 +573,7 @@ def _build_people(
             status_text = presence_label
             detail = endpoint.device_state or "Reachable"
 
-        people.append(
-            {
+        person = {
                 "name": name,
                 "extension": endpoint.extension,
                 "status": status,
@@ -579,7 +585,10 @@ def _build_people(
                     "label": presence_label,
                 },
             }
-        )
+        last_active = endpoint_last_active.get(endpoint.extension)
+        if presence == "offline" and last_active is not None:
+            person["lastActiveAt"] = last_active.isoformat()
+        people.append(person)
 
     return people
 

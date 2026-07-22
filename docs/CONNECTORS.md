@@ -30,7 +30,7 @@ PBX connector
 | FreeSWITCH | `freeswitch.py` | Event Socket connection, registered extensions, active channels, optional mod_callcenter queue counts and JSON CDR/voicemail paths |
 | FusionPBX | `freeswitch.py` | Supported as a FreeSWITCH-based system |
 | Yeastar P-Series | `yeastar.py` | OAuth API, extension status, live calls, queue waiting status, CDR, voicemail, recordings |
-| Cisco Unified Communications Manager | `cucm.py` | Read-only AXL inventory, RisPort70 registration presence, and completed CDR/CMR history; no active calls until JTAPI |
+| Cisco Unified Communications Manager | `cucm.py`, `jtapi.py` | Read-only AXL inventory, RisPort70 registration presence, completed CDR/CMR history, and optional JTAPI live calls |
 | Mock | `mock.py` | Development/test fixture |
 
 GUI PBX distributions are handled through the PBX engine underneath them.
@@ -120,6 +120,10 @@ over a PBX-provided presence state while a live channel exists. Connectors may
 provide a raw presence value through `AmiEndpoint.presence`; otherwise the
 Agent derives presence from the endpoint device state. Existing `status`,
 `statusText`, and `detail` fields remain available for older app versions.
+When a non-trunk endpoint transitions from reachable to offline, the Agent may
+also include `lastActiveAt` as an ISO 8601 timestamp. It represents the final
+healthy Agent observation, not a PBX registration-expiry timestamp. The field
+is omitted for online devices and until the Agent has observed a healthy state.
 
 ## Add A Connector
 

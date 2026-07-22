@@ -1,14 +1,21 @@
+FROM eclipse-temurin:8-jre AS jtapi-java
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 WORKDIR /app
+
+COPY --from=jtapi-java /opt/java/openjdk /opt/java/openjdk
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY pbxsense_agent ./pbxsense_agent
+COPY jtapi_bridge ./jtapi_bridge
 
 RUN adduser --disabled-password --gecos "" pbxsense \
   && mkdir -p /var/lib/pbxsense-agent /var/log/pbxsense-agent \

@@ -4,11 +4,13 @@ import base64
 import ssl
 import time
 from collections import defaultdict
+from dataclasses import replace
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
 from .pulse import AmiEndpoint, AmiSnapshot
+from .jtapi import JtapiBridge
 from .settings import AgentSettings
 from .version import AGENT_VERSION
 
@@ -21,8 +23,8 @@ class CucmClient:
     """Read-only CUCM inventory and registration connector.
 
     AXL supplies directory-number/device ownership; RisPort70 supplies the
-    cluster-wide registration snapshot. Live calls deliberately remain empty
-    until the separate JTAPI milestone.
+    cluster-wide registration snapshot. The optional JTAPI bridge supplies
+    live calls without making Core availability depend on Java/JTAPI health.
     """
 
     name = "cucm"
@@ -32,10 +34,11 @@ class CucmClient:
         self._settings = settings
         self._cached_snapshot: AmiSnapshot | None = None
         self._refresh_after = 0.0
+        self._jtapi = JtapiBridge(settings)
 
     def snapshot(self) -> AmiSnapshot:
         if self._cached_snapshot and time.monotonic() < self._refresh_after:
-            return self._cached_snapshot
+            return replace(self._cached_snapshot, channels=self._jtapi.channels())
         try:
             inventory = self._directory_inventory()
             registration = self._registration_status()
@@ -53,7 +56,7 @@ class CucmClient:
         # RisPort is a bulk real-time query; avoid turning the one-second app
         # refresh into a one-second CUCM SOAP poll.
         self._refresh_after = time.monotonic() + 10
-        return result
+        return replace(result, channels=self._jtapi.channels())
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -67,7 +70,6 @@ class CucmClient:
             ),
             "axlReachable": False,
             "risPortReachable": False,
-            "liveCallsAvailable": False,
         }
         try:
             self._directory_inventory()
@@ -79,11 +81,12 @@ class CucmClient:
             result["risPortReachable"] = True
         except OSError as exc:
             result["risPortError"] = str(exc)
+        result.update(self._jtapi.diagnostics())
         result["ok"] = (
             result["axlReachable"] is True and result["risPortReachable"] is True
         )
         result["message"] = (
-            "CUCM inventory and registration services are reachable. Live calls require the later JTAPI connector."
+            "CUCM Core services are reachable."
             if result["ok"]
             else "CUCM AXL or RisPort needs attention."
         )

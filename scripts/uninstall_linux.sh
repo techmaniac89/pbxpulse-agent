@@ -1,4 +1,5 @@
 #!/bin/sh
+# Keep this file in Unix LF format; CRLF breaks /bin/sh option parsing.
 set -e
 
 SERVICE_USER="pbxsense"
@@ -6,6 +7,7 @@ SERVICE_NAME="pbxsense-agent"
 INSTALL_DIR="/opt/pbxsense-agent"
 ENV_FILE="/etc/pbxsense-agent.env"
 SYSTEMD_UNIT="/etc/systemd/system/$SERVICE_NAME.service"
+ADMIN_COMMAND="/usr/local/bin/pbxsense-agent"
 DATA_DIR="/var/lib/pbxsense-agent"
 LOG_DIR="/var/log/pbxsense-agent"
 PURGE=0
@@ -48,6 +50,11 @@ fi
 if [ -f "$SYSTEMD_UNIT" ]; then
   echo "Removing $SYSTEMD_UNIT"
   rm -f "$SYSTEMD_UNIT"
+fi
+
+if [ -L "$ADMIN_COMMAND" ] || [ -f "$ADMIN_COMMAND" ]; then
+  echo "Removing $ADMIN_COMMAND"
+  rm -f "$ADMIN_COMMAND"
 fi
 
 if command -v systemctl >/dev/null 2>&1; then

@@ -3,14 +3,64 @@ from __future__ import annotations
 import csv
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
-from pbxsense_agent.cucm import _merge_inventory_and_registration
+from pbxsense_agent.cucm import CucmClient, _merge_inventory_and_registration
 from pbxsense_agent.engine import build_engine_signals
 from pbxsense_agent.history import read_recent_cucm_calls
+from pbxsense_agent.jtapi import JtapiBridge, _channel_from_call
+from pbxsense_agent.pulse import AmiChannel
+from pbxsense_agent.settings import AgentSettings
 
 
 class CucmConnectorTest(unittest.TestCase):
+    def test_bundled_jtapi_bridge_targets_java_8(self) -> None:
+        class_file = Path(__file__).parents[1] / "jtapi_bridge" / "classes" / "PBXSenseJtapiBridge.class"
+        bytecode = class_file.read_bytes()
+        self.assertEqual(bytecode[:4], b"\xca\xfe\xba\xbe")
+        self.assertEqual(int.from_bytes(bytecode[6:8], "big"), 52)
+
+    def test_jtapi_is_optional_by_default(self) -> None:
+        settings = replace(AgentSettings.from_env(), pbx_type="cucm", mode="cucm")
+        diagnostics = JtapiBridge(settings).diagnostics()
+        self.assertFalse(diagnostics["jtapiConfigured"])
+        self.assertFalse(diagnostics["liveCallsAvailable"])
+
+    def test_jtapi_call_maps_to_agent_live_channel(self) -> None:
+        channel = _channel_from_call({
+            "id": "cluster-42", "caller": "1001", "destination": "2000",
+            "extension": "1001", "state": "Ringing", "duration": "4",
+        })
+        self.assertEqual(channel.channel, "JTAPI/cluster-42")
+        self.assertEqual(channel.caller_number, "1001")
+        self.assertEqual(channel.connected_number, "2000")
+        self.assertEqual(channel.state, "Ringing")
+
+    def test_cached_core_snapshot_still_refreshes_jtapi_calls(self) -> None:
+        settings = replace(AgentSettings.from_env(), pbx_type="cucm", mode="cucm")
+        client = CucmClient(settings)
+        client._directory_inventory = lambda: []  # type: ignore[method-assign]
+        client._registration_status = lambda: {}  # type: ignore[method-assign]
+
+        class Calls:
+            count = 0
+            def channels(self) -> list[AmiChannel]:
+                self.count += 1
+                return [AmiChannel(
+                    channel=f"JTAPI/{self.count}", extension="1001", caller="1001",
+                    connected="2000", state="Up", linked_id=str(self.count),
+                )]
+            def diagnostics(self) -> dict[str, object]:
+                return {}
+
+        calls = Calls()
+        client._jtapi = calls  # type: ignore[assignment]
+        first = client.snapshot()
+        second = client.snapshot()
+        self.assertEqual(first.channels[0].channel, "JTAPI/1")
+        self.assertEqual(second.channels[0].channel, "JTAPI/2")
+
     def test_inventory_and_risport_merge_shared_line_devices(self) -> None:
         endpoints = _merge_inventory_and_registration(
             [

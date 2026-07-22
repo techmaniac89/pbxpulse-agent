@@ -13,16 +13,28 @@ the PBX connector.
 
 ```bash
 cd pbxsense-agent
-sudo sh ./scripts/install_linux.sh
+sudo sh ./scripts/install_debian.sh
 ```
+
+For Fedora, RHEL, Rocky Linux, AlmaLinux, or another `dnf`-based distribution:
+
+```bash
+cd pbxsense-agent
+sudo sh ./scripts/install_fedora.sh
+```
+
+The Fedora installer installs `python3`, `python3-pip`, `python3-devel`, and
+`gcc`, then runs the shared PBXSense configuration and systemd setup. It does
+not alter `firewalld`; allow the configured Agent port only from trusted app or
+management networks when remote LAN access is required.
 
 If the folder was copied from Windows to Linux, the scripts may arrive as
 `664`. Running them with `sh` works without needing the executable bit. Release
 archives preserve executable modes.
 
-The installer:
+Both distribution-specific installers:
 
-- Installs Python runtime packages when `apt-get` is available.
+- Install Python runtime packages through `apt-get` or `dnf`.
 - Auto-detects local Asterisk or FreeSWITCH files and commands when possible.
 - Lets you confirm `asterisk`, `grandstream`, `freeswitch`, `yeastar`, or `mock` mode interactively.
 - Prompts for timezone, Agent port, and connector timeout.
@@ -36,6 +48,7 @@ The installer:
 - On upgrades, adds missing non-secret defaults without replacing existing
   administrator values or credentials.
 - Generates `PBXSENSE_AGENT_TOKEN` when missing.
+- Prints the complete authenticated admin URL when installation finishes.
 - Creates and starts `pbxsense-agent.service`.
 - Runs Uvicorn on `0.0.0.0:8765` by default.
 
@@ -57,13 +70,20 @@ systemctl status pbxsense-agent
 journalctl -u pbxsense-agent -f
 ```
 
-Open the Agent:
+Open the authenticated link printed at the end of installation on the
+administrator's PC. The browser receives a long-lived HttpOnly authorization
+that renews on use and remains until browser site data is cleared or the Agent
+token changes. If automatic host detection is unsuitable, run the installer as
+`sudo PBXSENSE_ACCESS_HOST=<LAN-IP-or-hostname> sh ./scripts/install_debian.sh`
+(or use `install_fedora.sh`).
+
+The underlying Agent address is:
 
 ```text
 http://<agent-host>:8765/
 ```
 
-Pair the app:
+The explicit token-bearing pairing URL remains available for troubleshooting:
 
 ```text
 http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
@@ -233,6 +253,8 @@ CUCM_AXL_VERSION=15.0
 CUCM_VERIFY_TLS=true
 CUCM_CDR_PATH=/var/lib/pbxsense-agent/cucm/cdr
 CUCM_CMR_PATH=/var/lib/pbxsense-agent/cucm/cmr
+CUCM_JTAPI_ENABLED=false
+CUCM_JTAPI_CLASSPATH=/opt/pbxsense-agent/vendor/jtapi/*
 ```
 
 Enable the Cisco AXL Web Service and Cisco RIS Data Collector services. Import
@@ -242,8 +264,27 @@ verification is intended only for temporary diagnosis.
 Configure CUCM CDR Management to deliver CDR and CMR CSV files to an SFTP
 inbox exposed at the configured paths. PBXSense reads files already present in
 those directories; it does not provide or configure the SFTP server. Completed
-calls and media quality then appear in history. Active calls are deliberately
-unavailable until a later JTAPI connector is configured.
+calls and media quality then appear in history.
+
+To enable live calls, download the Cisco JTAPI Client plugin from this CUCM
+cluster, copy all supplied jar files to `/opt/pbxsense-agent/vendor/jtapi/`,
+and set `CUCM_JTAPI_ENABLED=true`. The JTAPI application user needs **Standard
+CTI Enabled** and the monitored phones assigned as controlled devices. A Java
+8 runtime is required by Cisco's CUCM 14/15 compatibility matrix; the Linux
+installer installs the distribution's headless runtime when JTAPI is enabled,
+and the Docker image includes Java 8. For Compose, place the
+jars under `./vendor/jtapi/`. Do not copy JTAPI jars from a different CUCM
+release because Cisco couples the client plugin to the cluster version.
+
+Cisco currently documents Java 8 for CUCM 14 and 15 JTAPI clients. The bundled
+bridge bytecode targets Java 8. Cisco's downloadable Linux libraries are x86
+32/64-bit, so run a JTAPI-enabled Agent container/service on a supported x86
+host rather than a Raspberry Pi/ARM host. Core AXL/RisPort and CDR/CMR support
+can still run on the Raspberry Pi with JTAPI disabled.
+
+Vendor references: [Install Plugins](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucm/admin/12_5_1/systemConfig/cucm_b_system-configuration-guide-1251/cucm_b_system-configuration-guide-1251_chapter_0110001.html),
+[JTAPI/UCM compatibility](https://developer.cisco.com/site/jtapi/jtapi-ucm-compatibility-matrix/),
+and [supported JVM versions](https://developer.cisco.com/site/jtapi/cisco-unified-jtapi-supported-jvm-versions/).
 
 ## Yeastar P-Series Install Notes
 
@@ -274,20 +315,26 @@ queues are omitted.
 
 ## Docker Compose Install
 
-Create `.env`:
+Run the interactive Docker setup wizard:
 
 ```bash
-cp .env.example .env
-python3 scripts/ensure_token.py .env
+sh ./scripts/setup_docker.sh
 ```
 
-Edit `.env` and set the connector credentials.
+It checks Docker Compose, creates or preserves `.env`, generates the Agent
+token, and presents the same connector-specific questions as the native Linux
+installers. It then offers to build and start the Agent. Existing administrator
+values remain the defaults when the wizard is run again.
 
-Start the Agent:
+If you choose not to start it in the wizard, run:
 
 ```bash
 docker compose up -d --build
 ```
+
+The Docker wizard prints the authenticated PC link when it finishes. Override
+automatic address detection by running it with
+`PBXSENSE_ACCESS_HOST=<LAN-IP-or-hostname> sh ./scripts/setup_docker.sh`.
 
 Rebuilding or upgrading with this command preserves the named data volume and
 `/var/lib/pbxsense-agent/relay_identity.json`, so registered apps remain linked

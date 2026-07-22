@@ -105,10 +105,11 @@ If `/pair` opens locally but not from another device:
 - Confirm the other device can reach `http://<agent-host>:8765/`.
 - Confirm host firewall rules allow TCP port `8765`.
 - Private LAN/VPN addresses do not bypass Agent authentication. Open the
-  pairing page with the configured token or scan the protected QR:
+  authenticated link printed by the installer on the intended PC. If the link
+  used the wrong address, rerun setup with an explicit host:
 
-```text
-http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
+```bash
+sudo PBXSENSE_ACCESS_HOST=<agent-host> sh ./scripts/install_debian.sh
 ```
 
 If the token is missing, generate one:

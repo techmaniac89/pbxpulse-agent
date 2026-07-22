@@ -64,7 +64,10 @@ pbxsense_agent/
   live.py          Live event diffing
   version.py       Agent version
 scripts/
-  install_linux.sh Linux service installer
+  setup_docker.sh  Interactive Docker connector setup and startup
+  install_common.sh Shared Linux service setup
+  install_debian.sh Debian/Ubuntu/Raspberry Pi OS installer entry point
+  install_fedora.sh Fedora/RHEL-family installer entry point
   ensure_token.py  Token generator
 tests/
   test_pulse.py    Mapping and signal tests

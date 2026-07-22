@@ -14,7 +14,7 @@ Use `.env.example` as the starting point.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PBXSENSE_PBX_TYPE` | `asterisk` | PBX family. Supports `asterisk`, `grandstream`, `freeswitch`, `yeastar`, `cucm`, `mock`, and aliases listed below. |
-| `PBXSENSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, `yeastar`, or `mock`. |
+| `PBXSENSE_AGENT_MODE` | derived | Connector mode. Usually `ami`, `freeswitch`, `yeastar`, `cucm`, or `mock`. |
 | `PBXSENSE_DISPLAY_NAME` | connector name | Friendly PBX name shown by the Agent. |
 | `PBXSENSE_TIMEZONE` | `TZ` or empty | IANA timezone for history and timestamps. |
 | `PBXSENSE_AGENT_TOKEN` | empty | Shared token for local/VPN/direct-Agent pairing and protected endpoints; it is not sent to the hosted relay. |
@@ -23,6 +23,7 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_EXTENSION_NAMES` | empty | Optional friendly-name map such as `101=Reception,120=Support`. |
 | `PBXSENSE_SNAPSHOT_POLL_SECONDS` | `1` | Central live PBX polling cadence, clamped to at least 0.5 seconds. |
 | `PBXSENSE_HISTORY_POLL_SECONDS` | `30` | CDR, voicemail, recording, and security-history refresh cadence, clamped to at least 5 seconds. |
+| `PBXSENSE_ENDPOINT_ACTIVITY_PATH` | `/var/lib/pbxsense-agent/endpoint_activity.json` | Persistent last-active timestamps captured when monitored devices transition offline. Keep this inside the Agent data volume. |
 | `PBXSENSE_QUALITY_FREQUENCY_SECONDS` | `180` | Evidence window before aggregate availability Tips are emitted. Immediate per-device Health Signals do not wait for it. |
 | `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Leave empty only for deliberately local-only installs. |
 | `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
@@ -141,13 +142,35 @@ app.
 | `CUCM_VERIFY_TLS` | `true` | Verify the CUCM certificate. Import its CA rather than disabling this in production. |
 | `CUCM_CDR_PATH` | `/var/lib/pbxsense-agent/cucm/cdr` | Inbox containing CUCM CDR CSV files. |
 | `CUCM_CMR_PATH` | `/var/lib/pbxsense-agent/cucm/cmr` | Inbox containing CUCM CMR CSV files. |
+| `CUCM_JTAPI_ENABLED` | `false` | Start the optional Cisco JTAPI live-call bridge. |
+| `CUCM_JTAPI_CLASSPATH` | `/opt/pbxsense-agent/vendor/jtapi/*` | Classpath containing the JTAPI Client jars downloaded from this CUCM cluster. |
+| `CUCM_JTAPI_JAVA` | `java` | Cisco-supported Java 8 executable used for the bridge. |
+| `CUCM_JTAPI_USERNAME` | empty | JTAPI application user; blank falls back to `CUCM_USERNAME`. |
+| `CUCM_JTAPI_PASSWORD` | empty | JTAPI password; blank falls back to `CUCM_PASSWORD`. |
+| `CUCM_JTAPI_POLL_SECONDS` | `1` | Bridge polling interval. Core AXL/RisPort polling remains independently cached. |
+| `CUCM_JTAPI_STALE_SECONDS` | `10` | Stop presenting live calls when no fresh bridge snapshot arrives within this interval. |
+| `CUCM_JTAPI_RESTART_SECONDS` | `15` | Minimum delay between failed bridge restarts. |
 
 Assign the application user `Standard AXL API Users`, `Standard AXL Read Only
 API Access`, and `Standard CCM Server Monitoring`. Enable **Cisco AXL Web
 Service** on the Publisher and **Cisco SOAP - Real-Time Service APIs** on the
 call-processing nodes. The connector uses a read-only SQL query through AXL to
 map directory numbers to devices, then uses RisPort70 for cluster-wide phone
-registration. It does not expose configuration writes or live calls.
+registration. It does not expose configuration writes.
+
+For live calls, download the Cisco JTAPI Client plugin from the same CUCM
+cluster and copy its jar files into `/opt/pbxsense-agent/vendor/jtapi/` (or
+`./vendor/jtapi/` beside the Compose file). Use a dedicated application user
+with **Standard CTI Enabled** and associate only the phones PBXSense should
+observe as controlled devices. Enable `CUCM_JTAPI_ENABLED=true`; a separate
+JTAPI username/password is optional when the Core user also has the required
+CTI permissions. The Agent starts and supervises the bundled Java bridge,
+consumes its JSON stream locally, and never exposes the JTAPI password in its
+command line. If the bridge or Java runtime fails, Core presence and completed
+CDR/CMR history continue normally while live calls report unavailable.
+Cisco currently supports its CUCM 14/15 JTAPI client on Java 8 and distributes
+Linux native libraries for x86 platforms. Raspberry Pi/ARM deployments should
+leave JTAPI disabled and run the JTAPI-enabled Agent on a supported x86 host.
 
 For history, configure CUCM CDR Management to push CDR and CMR files to an SFTP
 account whose destination directories are mounted at the two paths above. The
@@ -192,13 +215,13 @@ should set a long random token. Internet Relay uses a separate per-app device
 credential and does not reuse this token.
 
 Localhost, private LAN, and VPN clients must authenticate just like other
-clients. A valid token on an HTML request creates an HTTP-only, same-site cookie.
+clients. The installer prints an authenticated browser URL at completion; a
+valid HTML visit creates a long-lived, renewable HTTP-only, same-site cookie.
 The pairing page embeds the token in its QR payload so the app can authenticate
 `/home`, `/live`, diagnostics, recordings, and push-device registration:
 
-```text
-http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
-```
+Use `PBXSENSE_ACCESS_HOST=<agent-host>` when invoking an installer if automatic
+host detection would print an unsuitable address.
 
 `GET /health` is intentionally unauthenticated for container/service probes and
 returns no connector, PBX, or relay details.

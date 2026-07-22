@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.5.0-beta",
+    [string]$Version = "0.5.8-beta",
     [string]$OutputDir = ""
 )
 
@@ -30,13 +30,18 @@ if ($Python) {
         $PythonExe = $BundledPython
         $PythonArgs = @()
     } else {
-        throw "Python 3 is required to create Debian archives with Unix permissions."
+        throw "Python 3 is required to create Linux archives with Unix permissions."
     }
 }
 
 $SourcePackageName = "PBXSenseAgent-$Version-linux-source-installer"
+$JtapiClass = Join-Path $AgentRoot "jtapi_bridge\classes\PBXSenseJtapiBridge.class"
+if (-not (Test-Path $JtapiClass)) {
+    throw "Compiled Java 8 JTAPI bridge is missing. Run scripts/build_jtapi_bridge.sh first."
+}
 $AgentEntries = @(
     "pbxsense_agent",
+    "jtapi_bridge",
     "scripts",
     "docs",
     "requirements.txt",
@@ -71,7 +76,7 @@ function Copy-AgentPayload([string]$DestinationRoot) {
 
     # Release archives are frequently built on Windows and installed on Linux.
     # Keep /bin/sh scripts in Unix form even when the source checkout uses CRLF.
-    foreach ($Script in @("scripts/install_linux.sh", "scripts/uninstall_linux.sh")) {
+    foreach ($Script in @("scripts/install_common.sh", "scripts/install_debian.sh", "scripts/install_fedora.sh", "scripts/setup_docker.sh", "scripts/uninstall_linux.sh")) {
         $ScriptPath = Join-Path $DestinationRoot $Script
         if (-not (Test-Path $ScriptPath)) {
             continue
@@ -101,7 +106,7 @@ root = Path(sys.argv[1]).resolve()
 archive_path = Path(sys.argv[2]).resolve()
 kind = sys.argv[3]
 executable_control_scripts = {"postinst", "prerm", "postrm", "preinst"}
-executable_agent_scripts = {"scripts/install_linux.sh", "scripts/uninstall_linux.sh"}
+executable_agent_scripts = {"scripts/install_debian.sh", "scripts/install_fedora.sh", "scripts/setup_docker.sh", "scripts/uninstall_linux.sh"}
 
 with tarfile.open(archive_path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
     for current_root, directories, files in os.walk(root):
@@ -146,14 +151,17 @@ function New-SourceInstallerArchive {
 
     Write-Utf8NoBom (Join-Path $StageRoot "INSTALL.txt") @"
 PBXSense Agent $Version
-Target: generic Linux source installer
+Target: Debian-family and Fedora-family Linux source installer
 
-Use this archive for non-Debian Linux systems, manual installs, or systems
-where you prefer the transparent installer script over a native package.
+Use the entry point for the target distribution. Both installers share the
+same PBXSense configuration and hardened systemd service setup.
 
-Install:
+Debian/Ubuntu/Raspberry Pi OS:
   cd $SourcePackageName
-  sudo sh ./scripts/install_linux.sh
+  sudo sh ./scripts/install_debian.sh
+
+Fedora/RHEL family:
+  sudo sh ./scripts/install_fedora.sh
 
 The installer creates a Python virtual environment on the target machine and
 registers the systemd service.
@@ -165,7 +173,8 @@ version=$Version
 channel=breeze
 target=linux-source-installer
 format=source-installer
-installer=scripts/install_linux.sh
+debian_installer=scripts/install_debian.sh
+fedora_installer=scripts/install_fedora.sh
 service=pbxsense-agent
 requires=python3,python3-venv,python3-pip,systemd
 "@

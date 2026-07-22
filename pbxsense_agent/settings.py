@@ -50,6 +50,7 @@ class AgentSettings:
     history_poll_seconds: float = 30
     internet_relay_enabled: bool = True
     internet_relay_poll_seconds: float = 15
+    endpoint_activity_path: str = "/var/lib/pbxsense-agent/endpoint_activity.json"
     cucm_host: str = ""
     cucm_username: str = ""
     cucm_password: str = ""
@@ -57,6 +58,14 @@ class AgentSettings:
     cucm_verify_tls: bool = True
     cucm_cdr_path: str = "/var/lib/pbxsense-agent/cucm/cdr"
     cucm_cmr_path: str = "/var/lib/pbxsense-agent/cucm/cmr"
+    cucm_jtapi_enabled: bool = False
+    cucm_jtapi_classpath: str = "/opt/pbxsense-agent/vendor/jtapi/*"
+    cucm_jtapi_java: str = "java"
+    cucm_jtapi_username: str = ""
+    cucm_jtapi_password: str = ""
+    cucm_jtapi_poll_seconds: float = 1
+    cucm_jtapi_stale_seconds: float = 10
+    cucm_jtapi_restart_seconds: float = 15
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -158,6 +167,10 @@ class AgentSettings:
             internet_relay_poll_seconds=max(
                 5, _env_float("PBXSENSE_INTERNET_RELAY_POLL_SECONDS", 15)
             ),
+            endpoint_activity_path=os.getenv(
+                "PBXSENSE_ENDPOINT_ACTIVITY_PATH",
+                "/var/lib/pbxsense-agent/endpoint_activity.json",
+            ).strip(),
             cucm_host=os.getenv("CUCM_HOST", "").strip(),
             cucm_username=os.getenv("CUCM_USERNAME", "").strip(),
             cucm_password=os.getenv("CUCM_PASSWORD", ""),
@@ -169,6 +182,16 @@ class AgentSettings:
             cucm_cmr_path=os.getenv(
                 "CUCM_CMR_PATH", "/var/lib/pbxsense-agent/cucm/cmr"
             ).strip(),
+            cucm_jtapi_enabled=_env_bool("CUCM_JTAPI_ENABLED", False),
+            cucm_jtapi_classpath=os.getenv(
+                "CUCM_JTAPI_CLASSPATH", "/opt/pbxsense-agent/vendor/jtapi/*"
+            ).strip(),
+            cucm_jtapi_java=os.getenv("CUCM_JTAPI_JAVA", "java").strip() or "java",
+            cucm_jtapi_username=os.getenv("CUCM_JTAPI_USERNAME", "").strip(),
+            cucm_jtapi_password=os.getenv("CUCM_JTAPI_PASSWORD", ""),
+            cucm_jtapi_poll_seconds=max(0.25, _env_float("CUCM_JTAPI_POLL_SECONDS", 1)),
+            cucm_jtapi_stale_seconds=max(2, _env_float("CUCM_JTAPI_STALE_SECONDS", 10)),
+            cucm_jtapi_restart_seconds=max(5, _env_float("CUCM_JTAPI_RESTART_SECONDS", 15)),
         )
 
 

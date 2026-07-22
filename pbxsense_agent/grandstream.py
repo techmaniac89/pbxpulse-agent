@@ -31,6 +31,13 @@ class GrandstreamUcmClient(AmiClient):
     def _ami_password(self) -> str:
         return self._settings.grandstream_ami_password
 
+    def diagnostics(self) -> dict:
+        result = super().diagnostics()
+        result["tlsEnabled"] = self._settings.grandstream_ami_tls
+        if self._settings.grandstream_ami_tls:
+            result["tlsVerification"] = self._settings.grandstream_ami_verify_tls
+        return result
+
     def _connect(self) -> socket.socket:
         sock = super()._connect()
         if not self._settings.grandstream_ami_tls:

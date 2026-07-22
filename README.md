@@ -5,7 +5,7 @@ It runs near the PBX, observes PBX state through the safest available connector,
 and exposes a small PBXSense-shaped API that the app can consume without knowing
 PBX-specific protocols.
 
-The current Agent release is `0.5.0-beta` on the **Breeze** channel.
+The current Agent release is `0.5.8-beta` on the **Breeze** channel.
 
 The Agent keeps PBX integration concerns in one place. The app talks to the
 Agent; the Agent talks to Asterisk, FreeSWITCH, Yeastar P-Series, Grandstream
@@ -29,6 +29,8 @@ out of the user-facing PBXSense experience.
   first successful call.
 - Reports extension presence in People, including available, on-call, busy,
   ringing, away, DND, and offline states when the connector can observe them.
+- Persists the last healthy observation when a monitored device goes offline,
+  allowing device details to show when it was last active across Agent restarts.
 - Shows queue pressure when supported: Asterisk/Grandstream wait and member
   state, plus FreeSWITCH `mod_callcenter` and Yeastar waiting counts.
 - Groups recent PBX authentication failures and blocked ACL attempts into
@@ -66,8 +68,8 @@ The app should not talk directly to AMI, ESL, ARI, SIP, SSH, or raw PBX logs.
 - FreeSWITCH through Event Socket.
 - Yeastar P-Series through its OAuth-protected OpenAPI.
 - Grandstream UCM through its restricted Asterisk Manager Interface (AMI).
-- Cisco Unified Communications Manager through read-only AXL, RisPort70, and
-  CUCM-delivered CDR/CMR history files. Live calls require the later JTAPI connector.
+- Cisco Unified Communications Manager through read-only AXL, RisPort70,
+  CUCM-delivered CDR/CMR history files, and an optional JTAPI live-call bridge.
 - Mock connector for local development and UI testing.
 
 GUI PBX distributions are mapped to their underlying PBX engine:
@@ -85,16 +87,29 @@ connector settings, and generates a local pairing token when one is not already
 configured.
 
 ```bash
-sudo sh ./scripts/install_linux.sh
+sudo sh ./scripts/install_debian.sh
 ```
+
+On Fedora, RHEL, Rocky Linux, AlmaLinux, and other `dnf`-based systems, use:
+
+```bash
+sudo sh ./scripts/install_fedora.sh
+```
+
+The Fedora entry point installs the RPM-family Python prerequisites and then
+uses the shared configuration prompts and hardened systemd service setup. It
+does not open the host firewall automatically.
 
 Docker Compose is available when the PBX is already containerized or when the
 Agent should be managed as a container:
 
 ```bash
-cp .env.example .env
-docker compose up --build
+sh ./scripts/setup_docker.sh
 ```
+
+The wizard uses the same connector-specific questions as the Debian and Fedora
+installers, generates the Agent token, preserves an existing `.env`, and offers
+to build and start Compose. It prints the authenticated PC link when setup ends.
 
 For local development, use mock mode:
 
@@ -118,8 +133,12 @@ http://127.0.0.1:8765/pair
 ```
 
 If `PBXSENSE_AGENT_TOKEN` is configured, every protected HTTP and WebSocket
-request must present it. An authenticated HTML visit creates an HTTP-only local
-web cookie, so subsequent page links do not expose the token:
+request must present it. Native and Docker installers print the complete
+authenticated URL at the end, so the administrator does not transcribe the
+token. Opening it authorizes that PC browser with a long-lived HttpOnly cookie
+that renews on use. The authorization remains until browser site data is cleared
+or the Agent token changes. Set `PBXSENSE_ACCESS_HOST=<LAN-IP-or-hostname>` when
+running the installer if automatic address detection would print the wrong host.
 
 ```text
 http://<agent-host>:8765/pair?token=<PBXSENSE_AGENT_TOKEN>
@@ -193,7 +212,7 @@ On the PBX host, or on a small Linux machine that can reach the PBX connector:
 
 ```bash
 cd pbxsense-agent
-sudo sh ./scripts/install_linux.sh
+sudo sh ./scripts/install_debian.sh
 ```
 
 If the folder was copied from Windows to Linux, the scripts may arrive as
@@ -263,7 +282,7 @@ Set the PBX type before install if you want to skip auto-detection and force a
 connector mode:
 
 ```bash
-sudo PBXSENSE_PBX_TYPE=freeswitch sh ./scripts/install_linux.sh
+sudo PBXSENSE_PBX_TYPE=freeswitch sh ./scripts/install_debian.sh
 ```
 
 Supported values today:
@@ -435,13 +454,16 @@ Docker is the secondary deployment option. Use it when the PBX already runs in
 Compose, when you prefer container lifecycle management, or when the Agent
 should stay separate from the host Python environment.
 
-Create `.env` from the example:
+For normal deployment, run the connector-aware setup wizard:
 
 ```bash
-cp .env.example .env
+sh ./scripts/setup_docker.sh
 ```
 
-Edit `.env` and set:
+It creates or updates `.env`, generates the local Agent token, asks only for
+the selected connector's settings, and offers to start Compose. For manual or
+automated provisioning, copy `.env.example` to `.env` and set values directly,
+for example:
 
 ```text
 ASTERISK_AMI_PASSWORD=your-secret
@@ -619,7 +641,7 @@ Recommended release asset layout:
 
 ```text
 dist/
-  PBXSenseAgent-0.5.0-beta-linux-source-installer.tar.gz
+  PBXSenseAgent-0.5.8-beta-linux-source-installer.tar.gz
 ```
 
 Create the Linux release packages from a Linux release host and attach the
@@ -630,7 +652,7 @@ uninstall script. It installs under `/opt/pbxsense-agent`, creates the systemd
 service, writes `/etc/pbxsense-agent.env`, and creates the Python virtual
 environment on the target machine.
 
-For a release tag such as `agent-v0.5.0-beta`, attach the matching files from
+For a release tag such as `agent-v0.5.8-beta`, attach the matching files from
 `dist/`. The GitHub Release notes should include the Agent version, the
 supported PBX connectors, upgrade notes, and any installer changes.
 
