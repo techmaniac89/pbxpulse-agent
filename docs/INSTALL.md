@@ -105,8 +105,9 @@ PBXSENSE_INTERNET_RELAY_ENABLED=false
 ```
 
 The app still needs LAN/VPN access for pairing, diagnostics, recordings, and
-the one-second live WebSocket experience. Internet Relay is a fifteen-second
-sanitized Home fallback, not a public Agent endpoint.
+the one-second live WebSocket experience. Internet Relay is a server-managed
+sanitized Home fallback, currently polled every 60 seconds by default, not a
+public Agent endpoint.
 
 The protected Agent status page also includes **Paired apps**. It shows the
 apps registered with this Agent, including app version, platform, device model,

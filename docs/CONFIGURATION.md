@@ -31,6 +31,7 @@ Use `.env.example` as the starting point.
 | `PBXSENSE_RELAY_URL` | hosted PBXSense URL in `.env.example` | Shared notification/encrypted-data relay URL. Production URLs must use HTTPS; plain HTTP is accepted only for localhost development. Leave empty only for deliberately local-only installs. |
 | `PBXSENSE_RELAY_IDENTITY_PATH` | `/var/lib/pbxsense-agent/relay_identity.json` | Persistent Agent Ed25519 identity and durable relay state. Back up and preserve it across rebuilds. |
 | `PBXSENSE_RELAY_TIMEOUT` | `5` | Outbound relay HTTP timeout in seconds. |
+| `PBXSENSE_RELAY_ENROLLMENT_TICKET` | empty | Optional opaque first-enrollment ticket when the hosted Relay operates in paid/ticketed mode. Existing enrolled Agents authenticate with their durable identity and do not need another ticket. |
 | `PBXSENSE_INTERNET_RELAY_ENABLED` | `true` | Makes encrypted Internet Relay available to apps that explicitly enable it while pairing. Set `false` to prohibit it for this Agent. |
 | `PBXSENSE_INTERNET_RELAY_POLL_SECONDS` | `15` | Changed-snapshot check cadence, clamped to at least 5 seconds. Unchanged snapshots are not rewritten; control checks run at most once every five minutes. |
 
@@ -150,6 +151,8 @@ app.
 | `CUCM_VERIFY_TLS` | `true` | Verify the CUCM certificate. Import its CA rather than disabling this in production. |
 | `CUCM_CDR_PATH` | `/var/lib/pbxsense-agent/cucm/cdr` | Inbox containing CUCM CDR CSV files. |
 | `CUCM_CMR_PATH` | `/var/lib/pbxsense-agent/cucm/cmr` | Inbox containing CUCM CMR CSV files. |
+| `CUCM_HISTORY_HOST_PATH` | `../cucm-history` | Docker-only host directory mounted read-only at `/var/lib/pbxsense-agent/cucm`; place the `cdr/` and `cmr/` inboxes below it. |
+| `CUCM_JTAPI_HOST_PATH` | `../vendor/jtapi` | Docker-only host directory containing the CUCM-matched Cisco JTAPI Client jars and native libraries. |
 | `CUCM_JTAPI_ENABLED` | `false` | Start the optional Cisco JTAPI live-call bridge. |
 | `CUCM_JTAPI_CLASSPATH` | `/opt/pbxsense-agent/vendor/jtapi/*` | Classpath containing the JTAPI Client jars downloaded from this CUCM cluster. |
 | `CUCM_JTAPI_JAVA` | `java` | Cisco-supported Java 8 executable used for the bridge. |

@@ -211,6 +211,8 @@ Linux service installs write the final environment file to:
 - `docs/TROUBLESHOOTING.md`: diagnostics, AMI/ESL failures, pairing, and history.
 - `docs/DEVELOPMENT.md`: local setup, tests, project layout, and release notes.
 - `docs/SECURITY.md`: network boundaries, credentials, tokens, and service hardening.
+- The app repository's `docs/PRODUCTION_READINESS.md`: shared release-candidate
+  gates for the app, Agent, Relay, billing, and operations.
 
 ## Recommended Install
 
