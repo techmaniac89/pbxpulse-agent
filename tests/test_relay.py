@@ -576,14 +576,15 @@ class RelayTest(unittest.TestCase):
             self.assertTrue(relay.remove_device(
                 fcm_token="", relay_device_id="device_phone_one"
             ))
-            self.assertEqual(
-                relay.requests[-1],
+            self.assertIn(
                 (
                     "/v1/agents/agent_test/devices/revoke",
                     {"fcmToken": "", "relayDeviceId": "device_phone_one"},
                     True,
                 ),
+                relay.requests,
             )
+            self.assertIn("/v1/activations", [request[0] for request in relay.requests])
 
     def test_queues_device_registration_until_qr_enrollment_completes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

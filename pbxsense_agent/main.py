@@ -617,7 +617,16 @@ def pair(request: Request):
         and relay_status.get("enrolled") is not True
         and "activation=" not in payload
     )
-    if relay_status.get("enrolled") is True:
+    activation_pending = (
+        relay_status.get("enrolled") is True
+        and "activation=" not in payload
+    )
+    if activation_pending:
+        pairing_status = "Preparing secure pairing"
+        pairing_detail = (
+            "Waiting for the push relay to issue this app's protected pairing capability."
+        )
+    elif relay_status.get("enrolled") is True:
         pairing_status = "Add another app"
         pairing_detail = (
             "Scan this QR on the additional phone. It will register its own push-notification device with this Agent."
@@ -639,8 +648,9 @@ def pair(request: Request):
               <span class="dot"></span>
               <span>{pairing_status}<small>{pairing_detail}</small></span>
             </div>
-            <div class="qr">{qr_svg}</div>
-            <div class="pairing-text-row">
+            {'<div class="status"><span class="dot"></span><span>Please wait<small>This page will refresh automatically.</small></span></div>' if activation_pending else ''}
+            <div class="qr" {'style="display:none"' if activation_pending else ''}>{qr_svg}</div>
+            <div class="pairing-text-row" {'style="display:none"' if activation_pending else ''}>
               <div id="pairing-text" class="pairing-code">{escape(payload)}</div>
               <button id="copy-pairing-text" class="copy-button" type="button" title="Copy pairing text" aria-label="Copy pairing text">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -687,6 +697,9 @@ def pair(request: Request):
                 const initialDeviceRevision = {json.dumps(initial_device_revision)};
                 const statusUrl = {json.dumps('/push/devices/status' + _link_token_suffix(request))};
                 const appsUrl = {json.dumps(paired_apps_url)};
+                if ({json.dumps(activation_pending)}) {{
+                  window.setTimeout(() => window.location.reload(), 1500);
+                }}
                 const poll = async () => {{
                   try {{
                     const response = await fetch(statusUrl, {{ cache: 'no-store' }});

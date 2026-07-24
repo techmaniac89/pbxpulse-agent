@@ -98,6 +98,14 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn("navigator.clipboard.writeText", source)
         self.assertIn("copyFeedback.classList.add('visible')", source)
 
+    def test_enrolled_pairing_waits_for_replacement_cloud_activation(self) -> None:
+        source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
+
+        self.assertIn("activation_pending", source)
+        self.assertIn("Preparing secure pairing", source)
+        self.assertIn("This page will refresh automatically.", source)
+        self.assertIn("'style=\"display:none\"' if activation_pending", source)
+
     def test_empty_paired_app_states_use_the_neutral_gold_card(self) -> None:
         source = Path("pbxsense_agent/main.py").read_text(encoding="utf-8")
 

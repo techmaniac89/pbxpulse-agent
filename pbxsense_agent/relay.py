@@ -293,6 +293,15 @@ class AgentRelay:
                     },
                     signed=True,
                 )
+                self._secure_devices_refreshed_at = 0.0
+                # Prepare the next short-lived capability before the browser
+                # opens "Add another app". If the Relay is temporarily
+                # unavailable, /pair will keep waiting instead of exposing a
+                # misleading LAN-only QR for this enrolled Agent.
+                try:
+                    self._activation_locked()
+                except (OSError, TypeError, ValueError):
+                    pass
                 return True
             except OSError:
                 return False
