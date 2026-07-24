@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import hmac
 import json
 import logging
@@ -17,6 +18,7 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import parse_qs
 
 import firebase_admin
 from cryptography.exceptions import InvalidSignature
@@ -24,10 +26,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import FastAPI, HTTPException, Request
 from firebase_admin import firestore, messaging
 from google.api_core.exceptions import AlreadyExists
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 
-RELAY_VERSION = "0.5.1"
+RELAY_VERSION = "0.5.2"
 app = FastAPI(title="PBXSense Push Relay", version=RELAY_VERSION)
 firebase_admin.initialize_app(options={"projectId": os.getenv("GOOGLE_CLOUD_PROJECT")})
 db = firestore.client()
@@ -69,6 +71,7 @@ CONTROL_EXCHANGE_SECONDS = max(
 _request_windows: dict[str, deque[float]] = defaultdict(deque)
 _event_windows: dict[str, deque[float]] = defaultdict(deque)
 logger = logging.getLogger(__name__)
+_admin_cookie = "pbxsense_relay_admin"
 
 
 @app.middleware("http")
@@ -109,66 +112,50 @@ def health() -> dict[str, str]:
 
 @app.get("/v1/internal/usage")
 async def relay_usage(request: Request) -> dict[str, object]:
-    """Return privacy-safe current-day usage for operational cost tuning."""
+    """Return privacy-safe fleet usage and durable daily rollups."""
     _require_admin(request)
-    now = datetime.now(timezone.utc)
-    today = now.date().isoformat()
-    active_cutoff = now - timedelta(seconds=AGENT_LOSS_TIMEOUT_SECONDS)
-    connected_cutoff = now - timedelta(seconds=120)
-    totals: dict[str, int] = defaultdict(int)
-    agent_rows: list[dict[str, object]] = []
-    registered_apps = 0
-    connected_apps = 0
-    active_agents = 0
-    agents = list(db.collection("agents").limit(1000).stream())
-    for snapshot in agents:
-        agent = snapshot.to_dict() or {}
-        usage = _current_usage(agent, today)
-        for key, value in usage.items():
-            totals[key] += value
-        last_seen_at = agent.get("lastSeenAt")
-        active = isinstance(last_seen_at, datetime) and last_seen_at >= active_cutoff
-        if active:
-            active_agents += 1
-        apps = 0
-        connected = 0
-        for device_snapshot in snapshot.reference.collection("devices").stream():
-            device = device_snapshot.to_dict() or {}
-            apps += 1
-            device_usage = _current_usage(device, today)
-            for key, value in device_usage.items():
-                totals[key] += value
-            last_connected_at = device.get("lastConnectedAt")
-            if (
-                isinstance(last_connected_at, datetime)
-                and last_connected_at >= connected_cutoff
-            ):
-                connected += 1
-        registered_apps += apps
-        connected_apps += connected
-        agent_rows.append({
-            "agent": hashlib.sha256(snapshot.id.encode("utf-8")).hexdigest()[:12],
-            "active": active,
-            "registeredApps": apps,
-            "connectedApps": connected,
-            "usage": usage,
-        })
-    agent_rows.sort(
-        key=lambda row: sum(int(value) for value in row["usage"].values()),
-        reverse=True,
+    return _usage_report()
+
+
+@app.get("/admin/usage", response_class=HTMLResponse)
+async def usage_dashboard(request: Request) -> HTMLResponse:
+    """Render the private operator dashboard without exposing PBX content."""
+    if not _admin_authenticated(request):
+        return HTMLResponse(
+            _usage_login_page(),
+            status_code=401,
+            headers=_admin_page_headers(),
+        )
+    return HTMLResponse(
+        _usage_dashboard_page(_usage_report()),
+        headers=_admin_page_headers(),
     )
-    return {
-        "generatedAt": now.isoformat(),
-        "usageDate": today,
-        "registeredAgents": len(agents),
-        "activeAgents": active_agents,
-        "registeredApps": registered_apps,
-        "connectedApps": connected_apps,
-        "totals": dict(sorted(totals.items())),
-        "policy": _relay_policy(),
-        "agents": agent_rows[:100],
-        "privacy": "Agent identifiers are one-way hashes; PBX and call content is excluded.",
-    }
+
+
+@app.post("/admin/usage")
+async def usage_dashboard_login(request: Request) -> Any:
+    body = (await request.body()).decode("utf-8", errors="replace")
+    supplied = parse_qs(body).get("token", [""])[0]
+    if not _admin_token or not hmac.compare_digest(supplied, _admin_token):
+        return HTMLResponse(
+            _usage_login_page("That administrator token was not accepted."),
+            status_code=401,
+            headers=_admin_page_headers(),
+        )
+    response = RedirectResponse(
+        "/admin/usage",
+        status_code=303,
+        headers=_admin_page_headers(),
+    )
+    response.set_cookie(
+        _admin_cookie,
+        supplied,
+        max_age=8 * 60 * 60,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+    )
+    return response
 
 
 @app.post("/v1/internal/enrollment-tickets")
@@ -501,7 +488,7 @@ async def heartbeat(agent_id: str, request: Request) -> dict[str, object]:
     agent_ref.update({
         "lastSeenAt": firestore.SERVER_TIMESTAMP,
         "lostAt": None,
-        **_usage_update(agent, heartbeats=1),
+        **_usage_update(agent_ref, agent, "agent", agent_id, heartbeats=1),
     })
     return {"status": "ok", "policy": _relay_policy()}
 
@@ -529,7 +516,13 @@ async def secure_exchange(agent_id: str, request: Request) -> dict[str, object]:
         "secureRelayProtocolVersion": 1,
         "secureRelayCapabilities": safe_capabilities,
         "secureRelayLastSeenAt": firestore.SERVER_TIMESTAMP,
-        **_usage_update(agent, controlExchanges=1),
+        **_usage_update(
+            agent_ref,
+            agent,
+            "agent",
+            agent_id,
+            controlExchanges=1,
+        ),
     })
     commands_ref = agent_ref.collection("secureCommands")
     for response in responses:
@@ -605,7 +598,10 @@ async def publish_secure_snapshots(agent_id: str, request: Request) -> dict[str,
         devices_ref.document(device_id).collection("secureSnapshots").document("latest").set(safe_envelope)
         devices_ref.document(device_id).update(
             _usage_update(
+                devices_ref.document(device_id),
                 device,
+                "app",
+                f"{agent_id}/{device_id}",
                 encryptedSnapshotsPublished=1,
                 encryptedSnapshotBytes=len(ciphertext),
             )
@@ -619,7 +615,13 @@ async def read_secure_snapshot(agent_id: str, device_id: str, request: Request) 
     device_ref, device = _authenticate_relay_device(agent_id, device_id, request)
     device_ref.update({
         "lastConnectedAt": firestore.SERVER_TIMESTAMP,
-        **_usage_update(device, remoteSnapshotReads=1),
+        **_usage_update(
+            device_ref,
+            device,
+            "app",
+            f"{agent_id}/{device_id}",
+            remoteSnapshotReads=1,
+        ),
     })
     agent_snapshot = db.collection("agents").document(agent_id).get()
     agent = agent_snapshot.to_dict() if agent_snapshot.exists else None
@@ -1213,6 +1215,16 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return body
 
 
+def _admin_authenticated(request: Request) -> bool:
+    supplied = request.headers.get("x-pbxsense-admin-token", "")
+    if not supplied:
+        supplied = request.cookies.get(_admin_cookie, "")
+    return bool(
+        _admin_token
+        and hmac.compare_digest(supplied, _admin_token)
+    )
+
+
 def _require_admin(request: Request) -> None:
     supplied = request.headers.get("x-pbxsense-admin-token", "")
     if not _admin_token or not hmac.compare_digest(supplied, _admin_token):
@@ -1228,9 +1240,16 @@ def _relay_policy() -> dict[str, int]:
     }
 
 
-def _usage_update(existing: dict[str, object], **increments: int) -> dict[str, object]:
+def _usage_update(
+    reference: Any,
+    existing: dict[str, object],
+    entity_kind: str,
+    entity_id: str,
+    **increments: int,
+) -> dict[str, object]:
     """Build counters that reuse an endpoint's existing Firestore write."""
     today = datetime.now(timezone.utc).date().isoformat()
+    _archive_usage(reference, existing, entity_kind, entity_id, today)
     clean = {
         key: max(0, int(value))
         for key, value in increments.items()
@@ -1255,6 +1274,275 @@ def _current_usage(document: dict[str, object], today: str) -> dict[str, int]:
         for key, value in usage.items()
         if isinstance(value, (int, float)) and value >= 0
     }
+
+
+def _archive_usage(
+    reference: Any,
+    document: dict[str, object],
+    entity_kind: str,
+    entity_id: str,
+    today: str,
+) -> None:
+    """Persist the completed UTC-day counters once per entity and date."""
+    usage_date = document.get("usageDate")
+    if not isinstance(usage_date, str) or usage_date == today:
+        return
+    if document.get("usageArchivedDate") == usage_date:
+        return
+    try:
+        datetime.strptime(usage_date, "%Y-%m-%d")
+    except ValueError:
+        return
+    usage = _current_usage(document, usage_date)
+    if not usage:
+        return
+    identity = hashlib.sha256(
+        f"{entity_kind}:{entity_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    archive_ref = (
+        db.collection("usageDaily")
+        .document(usage_date)
+        .collection("entities")
+        .document(identity)
+    )
+    archive_ref.set(
+        {
+            "kind": entity_kind,
+            "usage": usage,
+            "archivedAt": firestore.SERVER_TIMESTAMP,
+            "expiresAt": datetime.now(timezone.utc) + timedelta(days=90),
+        }
+    )
+    reference.update({"usageArchivedDate": usage_date})
+
+
+def _usage_report(days: int = 7) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    active_cutoff = now - timedelta(seconds=AGENT_LOSS_TIMEOUT_SECONDS)
+    connected_cutoff = now - timedelta(seconds=120)
+    totals: dict[str, int] = defaultdict(int)
+    agent_rows: list[dict[str, object]] = []
+    registered_apps = 0
+    connected_apps = 0
+    active_agents = 0
+    usage_agents = 0
+    usage_apps = 0
+    agents = list(db.collection("agents").limit(1000).stream())
+    for snapshot in agents:
+        agent = snapshot.to_dict() or {}
+        _archive_usage(snapshot.reference, agent, "agent", snapshot.id, today)
+        usage = _current_usage(agent, today)
+        if usage:
+            usage_agents += 1
+        for key, value in usage.items():
+            totals[key] += value
+        last_seen_at = agent.get("lastSeenAt")
+        active = isinstance(last_seen_at, datetime) and last_seen_at >= active_cutoff
+        if active:
+            active_agents += 1
+        apps = 0
+        connected = 0
+        for device_snapshot in snapshot.reference.collection("devices").stream():
+            device = device_snapshot.to_dict() or {}
+            _archive_usage(
+                device_snapshot.reference,
+                device,
+                "app",
+                f"{snapshot.id}/{device_snapshot.id}",
+                today,
+            )
+            apps += 1
+            device_usage = _current_usage(device, today)
+            if device_usage:
+                usage_apps += 1
+            for key, value in device_usage.items():
+                totals[key] += value
+            last_connected_at = device.get("lastConnectedAt")
+            if (
+                isinstance(last_connected_at, datetime)
+                and last_connected_at >= connected_cutoff
+            ):
+                connected += 1
+        registered_apps += apps
+        connected_apps += connected
+        agent_rows.append({
+            "agent": hashlib.sha256(snapshot.id.encode("utf-8")).hexdigest()[:12],
+            "active": active,
+            "registeredApps": apps,
+            "connectedApps": connected,
+            "usage": usage,
+        })
+    agent_rows.sort(
+        key=lambda row: sum(int(value) for value in row["usage"].values()),
+        reverse=True,
+    )
+    daily = _daily_usage(
+        now,
+        days,
+        today,
+        totals,
+        usage_agents,
+        usage_apps,
+    )
+    return {
+        "generatedAt": now.isoformat(),
+        "usageDate": today,
+        "registeredAgents": len(agents),
+        "activeAgents": active_agents,
+        "registeredApps": registered_apps,
+        "connectedApps": connected_apps,
+        "totals": dict(sorted(totals.items())),
+        "daily": daily,
+        "policy": _relay_policy(),
+        "agents": agent_rows[:100],
+        "agentsTruncated": len(agent_rows) > 100,
+        "privacy": "Agent identifiers are one-way hashes; PBX and call content is excluded.",
+    }
+
+
+def _daily_usage(
+    now: datetime,
+    days: int,
+    today: str,
+    today_totals: dict[str, int],
+    today_agents: int,
+    today_apps: int,
+) -> list[dict[str, object]]:
+    rollups: list[dict[str, object]] = []
+    for offset in range(max(1, min(days, 31))):
+        usage_date = (now.date() - timedelta(days=offset)).isoformat()
+        if usage_date == today:
+            rollups.append({
+                "date": usage_date,
+                "agents": today_agents,
+                "apps": today_apps,
+                "totals": dict(sorted(today_totals.items())),
+                "complete": False,
+            })
+            continue
+        totals: dict[str, int] = defaultdict(int)
+        agent_count = 0
+        app_count = 0
+        entities = (
+            db.collection("usageDaily")
+            .document(usage_date)
+            .collection("entities")
+            .stream()
+        )
+        for entity_snapshot in entities:
+            entity = entity_snapshot.to_dict() or {}
+            if entity.get("kind") == "agent":
+                agent_count += 1
+            elif entity.get("kind") == "app":
+                app_count += 1
+            usage = entity.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            for key, value in usage.items():
+                if isinstance(value, (int, float)) and value >= 0:
+                    totals[str(key)] += int(value)
+        rollups.append({
+            "date": usage_date,
+            "agents": agent_count,
+            "apps": app_count,
+            "totals": dict(sorted(totals.items())),
+            "complete": True,
+        })
+    return rollups
+
+
+def _usage_login_page(error: str = "") -> str:
+    message = (
+        f'<p class="error">{html.escape(error)}</p>'
+        if error else
+        "<p>Enter the Relay administrator token. It is stored only in a secure, HTTP-only session cookie.</p>"
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PBXSense Relay usage</title><style>{_usage_css()}</style></head>
+<body><main class="login"><section><p class="eyebrow">PBXSense Relay</p><h1>Usage dashboard</h1>
+{message}<form method="post" action="/admin/usage"><label>Administrator token
+<input type="password" name="token" autocomplete="current-password" required></label>
+<button type="submit">Open dashboard</button></form></section></main></body></html>"""
+
+
+def _admin_page_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        ),
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    }
+
+
+def _usage_dashboard_page(report: dict[str, object]) -> str:
+    policy = report["policy"]
+    totals = report["totals"]
+    daily_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(row['date']))}{'' if row['complete'] else ' (today)'}</td>"
+        f"<td>{row['agents']}</td><td>{row['apps']}</td>"
+        f"<td>{row['totals'].get('heartbeats', 0):,}</td>"
+        f"<td>{row['totals'].get('controlExchanges', 0):,}</td>"
+        f"<td>{row['totals'].get('remoteSnapshotReads', 0):,}</td>"
+        f"<td>{row['totals'].get('encryptedSnapshotsPublished', 0):,}</td>"
+        f"<td>{row['totals'].get('encryptedSnapshotBytes', 0):,}</td>"
+        "</tr>"
+        for row in report["daily"]
+    )
+    agent_rows = "".join(
+        "<tr>"
+        f"<td><code>{html.escape(str(row['agent']))}</code></td>"
+        f"<td>{'Active' if row['active'] else 'Inactive'}</td>"
+        f"<td>{row['registeredApps']}</td><td>{row['connectedApps']}</td>"
+        f"<td>{sum(int(value) for value in row['usage'].values()):,}</td>"
+        "</tr>"
+        for row in report["agents"]
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="300"><title>PBXSense Relay usage</title>
+<style>{_usage_css()}</style></head><body><main><header><div><p class="eyebrow">PBXSense Relay {RELAY_VERSION}</p>
+<h1>Usage dashboard</h1><p>Updated {html.escape(str(report['generatedAt']))}; refreshes every five minutes.</p></div>
+<span class="status">Privacy-safe</span></header>
+<section class="cards"><article><span>Active Agents</span><strong>{report['activeAgents']}</strong><small>{report['registeredAgents']} registered</small></article>
+<article><span>Connected apps</span><strong>{report['connectedApps']}</strong><small>{report['registeredApps']} registered</small></article>
+<article><span>Heartbeats today</span><strong>{totals.get('heartbeats', 0):,}</strong><small>30/{policy['agentLossSeconds']} sec presence</small></article>
+<article><span>Remote reads today</span><strong>{totals.get('remoteSnapshotReads', 0):,}</strong><small>{policy['remotePollSeconds']} sec app policy</small></article></section>
+<section><h2>Remotely delivered policy</h2><div class="policy">
+<span>Presence <b>{policy['agentPresenceSeconds']} sec</b></span>
+<span>Lost after <b>{policy['agentLossSeconds']} sec</b></span>
+<span>App poll <b>{policy['remotePollSeconds']} sec</b></span>
+<span>Control exchange <b>{policy['controlExchangeSeconds']} sec</b></span></div>
+<p class="note">Presence is fixed for reliable Agent-down detection. App polling and control exchange are bounded server settings delivered in Relay responses.</p></section>
+<section><h2>Daily rollups</h2><div class="table"><table><thead><tr><th>UTC date</th><th>Agents</th><th>Apps</th><th>Heartbeats</th><th>Control</th><th>Remote reads</th><th>Snapshots</th><th>Encrypted bytes</th></tr></thead>
+<tbody>{daily_rows}</tbody></table></div></section>
+<section><h2>Agent activity today</h2><div class="table"><table><thead><tr><th>Hashed Agent</th><th>Status</th><th>Apps</th><th>Connected</th><th>Operations</th></tr></thead>
+<tbody>{agent_rows}</tbody></table></div><p class="note">{html.escape(str(report['privacy']))}</p></section>
+</main></body></html>"""
+
+
+def _usage_css() -> str:
+    return """
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#07110f;color:#edf7f2}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#17362e 0,#07110f 42%);min-height:100vh}
+main{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:42px 0 80px}header{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}
+h1{font-size:clamp(32px,5vw,54px);margin:4px 0 8px}h2{margin:0 0 18px;font-size:22px}.eyebrow{color:#f1bd70;text-transform:uppercase;letter-spacing:.14em;font-size:12px;font-weight:800}
+p{color:#a9bdb5}.status{background:#193f35;color:#8ce0c2;border:1px solid #285b4e;border-radius:999px;padding:8px 13px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:34px 0}article,section{background:#0e1d19;border:1px solid #203c34;border-radius:18px;padding:22px}
+section{margin:16px 0}article span,article small{display:block;color:#99afa6}article strong{display:block;font-size:34px;margin:10px 0 5px}
+.policy{display:flex;flex-wrap:wrap;gap:10px}.policy span{background:#152a24;border-radius:10px;padding:10px 13px;color:#a9bdb5}.policy b{color:#edf7f2}
+.table{overflow:auto}table{width:100%;border-collapse:collapse;min-width:760px}th,td{text-align:left;padding:12px;border-bottom:1px solid #203c34;font-variant-numeric:tabular-nums}th{color:#8ce0c2;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+code{color:#f1bd70}.note{font-size:13px}.login{display:grid;place-items:center;min-height:100vh;padding:20px}.login section{width:min(460px,100%)}label{display:grid;gap:8px;color:#a9bdb5}
+input{width:100%;padding:13px;border-radius:10px;border:1px solid #36554c;background:#07110f;color:#fff}button{margin-top:14px;border:0;border-radius:10px;padding:12px 16px;background:#e9ad5c;color:#191107;font-weight:800;cursor:pointer}.error{color:#ffaaa0}
+@media(max-width:800px){.cards{grid-template-columns:repeat(2,1fr)}header{display:block}.status{display:inline-block;margin-top:12px}}
+@media(max-width:480px){.cards{grid-template-columns:1fr}}
+"""
 
 
 def _decode_public_key(value: str) -> Ed25519PublicKey:

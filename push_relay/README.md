@@ -171,7 +171,7 @@ access to Firestore itself.
 
 Cloud Logging records only FCM outcome counts (eligible, accepted, failed, and
 invalid registrations removed); it never logs FCM tokens.
-Relay service `0.5.1` provides the encrypted Internet Relay data path and
+Relay service `0.5.2` provides the encrypted Internet Relay data path and
 cost/enrollment guardrails. Updated apps
 create an X25519 key during QR activation; the service returns a random,
 per-device access credential and stores only its hash. Agents publish a
@@ -191,7 +191,7 @@ The next registration removes older records carrying the same FCM token across
 Agent identities, migrating push-only pairings left behind by Agent rebuilds
 before scoped credentials existed.
 
-The 0.5.1 cost profile is local-first: Agents check for changed relay snapshots
+The 0.5.2 cost profile is local-first: Agents check for changed relay snapshots
 every 15 seconds, do not rewrite unchanged ciphertext, cache device lists for
 five minutes, and poll the bounded control channel at most every five minutes.
 Remote apps default to a server-controlled 60-second fallback interval when the
@@ -202,18 +202,31 @@ heartbeat, so cost tuning never weakens Agent-down detection.
 
 ### Privacy-safe usage monitoring
 
-The authenticated `GET /v1/internal/usage` endpoint reports current UTC-day
-totals for heartbeats, control exchanges, encrypted snapshot publication,
-remote snapshot reads, and encrypted bytes. It also reports active Agents,
-registered apps, and recently connected apps. Agent identifiers are one-way
-SHA-256 prefixes; PBX state, calls, extensions, FCM tokens, and encrypted
-payloads are never returned.
+Open `/admin/usage` and enter the Relay administrator token for the private
+operator dashboard. It shows current fleet presence, the remotely delivered
+policy, per-day counters, and hashed Agent activity. Its secure, HTTP-only
+session expires after eight hours and the dashboard refreshes every five
+minutes.
+
+The authenticated `GET /v1/internal/usage` endpoint exposes the same data as
+JSON. It reports current UTC-day totals for heartbeats, control exchanges,
+encrypted snapshot publication, remote snapshot reads, and encrypted bytes,
+plus seven days of daily history. It also reports active Agents, registered
+apps, and recently connected apps. Agent identifiers are one-way SHA-256
+prefixes; PBX state, calls, extensions, FCM tokens, and encrypted payloads are
+never returned.
 
 Heartbeat and remote-read counters reuse Firestore writes already required for
-presence and snapshot delivery. Snapshot publication adds one small metadata
-write only when the Agent publishes changed encrypted state; no extra write is
-added for each heartbeat or app poll. Query the report from an administrator
-workstation:
+presence and snapshot delivery. When an entity first becomes active on a new
+UTC day—or the dashboard observes its completed day—the Relay archives the
+previous counters once under an idempotent hashed entity key. Snapshot
+publication adds one small metadata write only when the Agent publishes changed
+encrypted state; no rollup write is added for each heartbeat or app poll. Query
+the JSON report from an administrator workstation:
+
+Rollup entity records carry a 90-day `expiresAt` timestamp. Enable Firestore TTL
+for the `entities` collection group's `expiresAt` field so historical operator
+metadata is deleted automatically after that window.
 
 ```sh
 TOKEN="$(gcloud secrets versions access latest \

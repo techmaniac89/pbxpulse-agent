@@ -130,7 +130,10 @@ class MainRouteStructureTest(unittest.TestCase):
         self.assertIn("Request rate limit exceeded", source)
         self.assertIn("_verify_public_key_request(public_key, request)", source)
         self.assertIn('@app.get("/v1/internal/usage")', source)
+        self.assertIn('@app.get("/admin/usage"', source)
         self.assertIn("def _usage_update", source)
+        self.assertIn('db.collection("usageDaily")', source)
+        self.assertIn("usageArchivedDate", source)
         self.assertIn("PBXSENSE_RELAY_REMOTE_APP_POLL_SECONDS", source)
         self.assertIn('"privacy": "Agent identifiers are one-way hashes;', source)
 
